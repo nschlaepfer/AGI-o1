@@ -1,3 +1,4 @@
+from flask import Flask, request, jsonify
 from openai import OpenAI
 import os
 import json
@@ -7,6 +8,8 @@ from datetime import datetime
 from collections import deque
 
 load_dotenv()
+
+app = Flask(__name__)
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
@@ -34,9 +37,64 @@ class ChatHistory:
         if 0 <= index < len(self.messages):
             del self.messages[index]
 
-chat_history = ChatHistory()
+chat_histories = {}  # Store chat histories for different sessions
 
-def gpt4o_chat(user_input):
+@app.route('/chat', methods=['POST'])
+def chat():
+    data = request.json
+    session_id = data.get('session_id', 'default')
+    user_input = data.get('message')
+
+    if session_id not in chat_histories:
+        chat_histories[session_id] = ChatHistory()
+
+    chat_history = chat_histories[session_id]
+
+    if not user_input:
+        return jsonify({"error": "No message provided"}), 400
+
+    logging.info(f"Processing user input for session {session_id}")
+    response = gpt4o_chat(user_input, chat_history)
+    logging.info(f"AI response for session {session_id}: {response}")
+
+    return jsonify({"response": response})
+
+@app.route('/edit_message', methods=['POST'])
+def edit_message():
+    data = request.json
+    session_id = data.get('session_id', 'default')
+    index = data.get('index')
+    new_content = data.get('new_content')
+
+    if session_id not in chat_histories:
+        return jsonify({"error": "Session not found"}), 404
+
+    chat_history = chat_histories[session_id]
+
+    try:
+        chat_history.edit_message(index, new_content)
+        return jsonify({"message": f"Message at index {index} edited."})
+    except IndexError:
+        return jsonify({"error": "Invalid message index"}), 400
+
+@app.route('/remove_message', methods=['POST'])
+def remove_message():
+    data = request.json
+    session_id = data.get('session_id', 'default')
+    index = data.get('index')
+
+    if session_id not in chat_histories:
+        return jsonify({"error": "Session not found"}), 404
+
+    chat_history = chat_histories[session_id]
+
+    try:
+        chat_history.remove_message(index)
+        return jsonify({"message": f"Message at index {index} removed."})
+    except IndexError:
+        return jsonify({"error": "Invalid message index"}), 400
+
+def gpt4o_chat(user_input, chat_history):
     logging.info(f"User input: {user_input}")
     chat_history.add_message("user", user_input)
     print("Calling GPT-4o for initial response...")
@@ -105,40 +163,5 @@ def o1_research(query):
     logging.info("o1 research completed")
     return response.choices[0].message.content
 
-# Main interaction loop
-while True:
-    user_input = input("You: ")
-    if user_input.lower() in ['exit', 'quit', 'bye']:
-        logging.info("User ended the conversation")
-        break
-    elif user_input.startswith("/edit"):
-        # Parse edit command: /edit <index> <new_content>
-        parts = user_input.split(maxsplit=2)
-        if len(parts) == 3:
-            try:
-                index = int(parts[1])
-                new_content = parts[2]
-                chat_history.edit_message(index, new_content)
-                print(f"Message at index {index} edited.")
-            except ValueError:
-                print("Invalid edit command. Use: /edit <index> <new_content>")
-        continue
-    elif user_input.startswith("/remove"):
-        # Parse remove command: /remove <index>
-        parts = user_input.split()
-        if len(parts) == 2:
-            try:
-                index = int(parts[1])
-                chat_history.remove_message(index)
-                print(f"Message at index {index} removed.")
-            except ValueError:
-                print("Invalid remove command. Use: /remove <index>")
-        continue
-    
-    logging.info("Processing user input...")
-    response = gpt4o_chat(user_input)
-    logging.info(f"AI response: {response}")
-    print("\nAI:", response)
-    print("\n" + "-"*50 + "\n")
-
-logging.info("Conversation ended")
+if __name__ == '__main__':
+    app.run(debug=True)

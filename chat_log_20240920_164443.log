@@ -186,3 +186,126 @@ let gameInterval = setInterval(game, 100);
 To run the game, create the three files (`index.html`, `styles.css`, and `script.js`) in a directory, copy the respective code into them, and open `index.html` in a web browser.
 
 Enjoy playing your Snake game! If you have any questions or need further assistance, feel free to ask.
+2024-09-20 17:11:55,506 - INFO - Processing user input...
+2024-09-20 17:11:55,506 - INFO - User input: great thanks!
+2024-09-20 17:11:56,767 - INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2024-09-20 17:11:56,769 - INFO - No function call detected, returning initial response
+2024-09-20 17:11:56,769 - INFO - AI response: You're welcome! I'm glad I could help. If you have any more questions or need further assistance with anything else, feel free to ask. Enjoy your Snake game!
+2024-09-20 17:14:10,328 - INFO - Processing user input...
+2024-09-20 17:14:10,328 - INFO - User input: how does html work? 
+2024-09-20 17:14:21,227 - INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2024-09-20 17:14:21,229 - INFO - No function call detected, returning initial response
+2024-09-20 17:14:21,230 - INFO - AI response: HTML (HyperText Markup Language) is the standard language used to create and design the structure of web pages. Here's a basic overview of how HTML works:
+
+### Structure
+
+HTML uses a system of tags to denote different elements of a webpage. Tags are enclosed in angle brackets (`< >`). Most HTML tags come in pairs: an opening tag and a closing tag. The closing tag is similar to the opening tag but includes a forward slash (`/`) before the tag name.
+
+```html
+<tagname>Content goes here</tagname>
+```
+
+### Basic HTML Document Structure
+
+A basic HTML document consists of several core elements:
+
+1. **`<!DOCTYPE html>`**: Declares the document type and version of HTML.
+2. **`<html>`**: The root element that contains all other elements.
+3. **`<head>`**: Contains meta-information about the document, such as the title, character set, links to stylesheets, etc.
+4. **`<title>`**: Specifies the title of the webpage, shown on the browser tab.
+5. **`<body>`**: Contains the content of the document, such as text, images, links, etc.
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Example Page</title>
+</head>
+<body>
+    <h1>Hello, World!</h1>
+    <p>Welcome to my website.</p>
+</body>
+</html>
+```
+
+### Common HTML Tags
+
+- **Headings**: `<h1>` to `<h6>` define headings, with `<h1>` being the largest and `<h6>` the smallest.
+- **Paragraphs**: `<p>` defines a paragraph.
+- **Links**: `<a>` defines a hyperlink. The `href` attribute specifies the URL.
+- **Images**: `<img>` embeds an image. The `src` attribute specifies the image source URL.
+- **Lists**: `<ul>` for unordered lists (bulleted), `<ol>` for ordered lists (numbered), and `<li>` for list items.
+- **Divisions and Spans**: `<div>` and `<span>` are used for grouping and applying styles.
+
+### Example
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>HTML Example</title>
+</head>
+<body>
+    <h1>My First Heading</h1>
+    <p>My first paragraph.</p>
+    <a href="https://www.example.com">This is a link</a>
+    <h2>My Second Heading</h2>
+    <ul>
+        <li>First item</li>
+        <li>Second item</li>
+        <li>Third item</li>
+    </ul>
+    <img src="example.jpg" alt="Example image">
+</body>
+</html>
+```
+
+### Attributes
+
+HTML tags can have attributes that provide additional information. Attributes are specified inside the opening tag and come in name/value pairs.
+
+```html
+<a href="https://www.example.com" target="_blank">Visit Example</a>
+<img src="example.jpg" alt="Example image" width="500" height="300">
+```
+
+### Document Object Model (DOM)
+
+The HTML document is represented as a tree structure known as the Document Object Model (DOM). JavaScript can be used to interact with the DOM, allowing dynamic manipulation of the HTML content.
+
+### Integrating CSS and JavaScript
+
+- **CSS (Cascading Style Sheets)** is used to style the HTML elements.
+- **JavaScript** is used to add interactivity and dynamic behavior to the web pages.
+
+#### Example: Linking CSS
+
+```html
+<head>
+    <link rel="stylesheet" href="styles.css">
+</head>
+```
+
+#### Example: Linking JavaScript
+
+```html
+<body>
+    <script src="script.js"></script>
+</body>
+```
+
+### Conclusion
+
+HTML is essential for creating and structuring web pages. It works hand-in-hand with CSS and JavaScript to build fully-functional and styled web applications. If you have any specific questions or need more details, feel free to ask!
+2024-09-20 17:15:20,040 - INFO - Processing user input...
+2024-09-20 17:15:20,041 - INFO - User input: thanks
+2024-09-20 17:15:21,025 - INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2024-09-20 17:15:21,027 - INFO - No function call detected, returning initial response
+2024-09-20 17:15:21,027 - INFO - AI response: You're welcome! If you have any other questions or need further assistance, feel free to ask. Enjoy creating and exploring HTML!
+2024-09-20 17:15:27,641 - INFO - Processing user input...
+2024-09-20 17:15:27,642 - INFO - User input: okay bye have a good day? 
+2024-09-20 17:15:28,744 - INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2024-09-20 17:15:28,746 - INFO - No function call detected, returning initial response
+2024-09-20 17:15:28,746 - INFO - AI response: Thank you! Have a great day as well. If you ever need assistance in the future, don't hesitate to reach out. Goodbye!
