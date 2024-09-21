@@ -1,2 +1,5 @@
 .env
 .venv/
+scratch_pad/
+o1_responses/
+logs/
