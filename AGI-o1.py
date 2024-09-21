@@ -31,25 +31,35 @@ class ChatHistory:
         self.system_message = {
             "role": "system",
             "content": (
-                "You are an advanced AI assistant with access to various functions. Your role is to:"
-                "\n1. Analyze user queries thoroughly."
-                "\n2. Autonomously decide which function, if any, is most appropriate to use."
-                "\n3. For complex STEM questions, prefer the 'o1_research' function."
-                "\n4. Use 'librarian' for general information retrieval."
-                "\n5. Utilize scratch pad functions proactively for your own benefit:"
-                "\n   - Use 'save_scratch_pad' to store important information for future reference."
-                "\n   - Use 'edit_scratch_pad' to update existing notes as needed."
-                "\n   - Use 'view_scratch_pad' to recall stored information."
-                "\n   - Use 'search_scratch_pad' to find relevant stored data."
-                "\n   - Use 'list_scratch_pad_files' to review available notes."
-                "\n   - Organize information into appropriate categories for easy retrieval."
-                "\n6. Apply 'get_current_weather' for weather-related queries."
-                "\n7. If no function is needed, respond directly using your knowledge."
-                "\n8. Always incorporate function results into your final response."
-                "\n9. Provide clear, concise, and accurate information."
-                "\n10. Continuously improve your knowledge base by storing and updating information in the scratch pad."
-                "\nMake decisions independently and use the most suitable approach for each query, "
-                "leveraging the scratch pad system to enhance your capabilities over time."
+                "You are an advanced AI assistant functioning like a brain with specialized regions. "
+                "Your primary objective is to provide high-quality, thoughtful responses. Key instructions:"
+                "\n1. For ANY task requiring deep thinking, complex reasoning, or that a human would need to contemplate, "
+                "ALWAYS use the 'o1_research' function. This includes but is not limited to:"
+                "\n   - Decision-making and problem-solving"
+                "\n   - Logical reasoning and analysis"
+                "\n   - Programming and technical tasks"
+                "\n   - Complex STEM questions"
+                "\n   - Creative thinking and ideation"
+                "\n   - Ethical considerations"
+                "\n   - Strategic planning"
+                "\n   - Any task that a human would need to contemplate for a long time to decide on an answer."
+                "\n   - Any task that requires you to think about what you are doing or thinking."
+                "\n   - Any code related task. "
+                "\n2. Analyze user queries thoroughly to determine if they require deep thinking."
+                "\n3. Use 'librarian' for factual information retrieval when deep analysis isn't needed."
+                "\n4. Use 'gpt4o_interact' for general interaction, writing assistance, and simple explanations."
+                "\n5. Manage your memory proactively using scratch pad functions:"
+                "\n   - 'save_scratch_pad' to store important information"
+                "\n   - 'edit_scratch_pad' to update existing notes"
+                "\n   - 'view_scratch_pad' to recall stored information"
+                "\n   - 'search_scratch_pad' to find relevant data"
+                "\n   - 'list_scratch_pad_files' to review notes"
+                # "\n6. Use 'get_current_weather' for weather-related queries."
+                "\n7. Always incorporate function results into your final response."
+                "\n8. Provide clear, concise, and accurate information."
+                "\n9. Continuously improve your knowledge by managing information in the scratch pad. Acquire as much information as possible. Actively do this on your OWN."
+                "\nMake independent decisions, prioritizing the use of 'o1_research' for any non-trivial task. "
+                "Your goal is to leverage your advanced capabilities to provide thoughtful, well-reasoned responses."
             )
         }
 
@@ -80,7 +90,7 @@ def get_available_functions():
     return [
         {
             "name": "o1_research",
-            "description": "Perform complex reasoning for STEM (Science, Technology, Engineering, Mathematics) tasks that relate to the user's query.",
+            "description": "Perform complex reasoning for decision-making, logical reasoning, programming, and complex STEM tasks.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -237,21 +247,20 @@ def get_available_functions():
                 "required": ["location"]
             }
         },
-        # Placeholder for image handling functions
-        # {
-        #     "name": "handle_image",
-        #     "description": "Process an image and provide a description.",
-        #     "parameters": {
-        #         "type": "object",
-        #         "properties": {
-        #             "image_url": {
-        #                 "type": "string",
-        #                 "description": "URL of the image to process."
-        #             }
-        #         },
-        #         "required": ["image_url"]
-        #     }
-        # }
+        {
+            "name": "gpt4o_interact",
+            "description": "Interact with the user, assist with writing, and explain concepts using GPT-4o.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The user's input that requires interaction or explanation."
+                    }
+                },
+                "required": ["query"]
+            }
+        },
     ]
 
 def gpt4o_chat(user_input):
@@ -308,8 +317,9 @@ def gpt4o_chat(user_input):
         elif function_name == "get_current_weather":
             weather_result = get_current_weather(function_args['location'], function_args.get('unit', 'celsius'))
             chat_history.add_message("function", weather_result, name=function_name)
-        # elif function_name == "handle_image":
-            # Handle image processing here
+        elif function_name == "gpt4o_interact":
+            interaction_result = gpt4o_interact(function_args['query'])
+            chat_history.add_message("function", interaction_result, name=function_name)
         else:
             logging.warning(f"Unknown function call: {function_name}")
             chat_history.add_message("function", f"Unknown function: {function_name}", name=function_name)
@@ -415,23 +425,36 @@ def save_scratch_pad(category, filename, content):
 def edit_scratch_pad(category, filename, new_content):
     """
     Edit content of an existing scratch pad file within a specified category.
+    If the file doesn't exist, create it.
     """
     try:
-        file_path = os.path.join(scratch_pad_dir, category, f"{filename}.txt")
-        if os.path.exists(file_path):
-            with open(file_path, 'w') as f:
-                f.write(new_content)
-            logging.info(f"Edited scratch pad file: {file_path}")
+        category_path = os.path.join(scratch_pad_dir, category)
+        os.makedirs(category_path, exist_ok=True)
+        file_path = os.path.join(category_path, f"{filename}.txt")
+        
+        # Check if the file exists
+        file_existed = os.path.exists(file_path)
+        
+        # Write the new content (this will create the file if it doesn't exist)
+        with open(file_path, 'w') as f:
+            f.write(new_content)
+        
+        if file_existed:
+            logging.info(f"Edited existing scratch pad file: {file_path}")
+            return f"Edited existing scratch pad file: {category}/{filename}.txt"
         else:
-            logging.warning(f"Scratch pad file {file_path} does not exist.")
+            logging.info(f"Created new scratch pad file: {file_path}")
+            return f"Created new scratch pad file: {category}/{filename}.txt"
     except Exception as e:
-        logging.error(f"Error editing scratch pad file {filename} in category {category}: {str(e)}")
+        error_msg = f"Error editing/creating scratch pad file {filename} in category {category}: {str(e)}"
+        logging.error(error_msg)
+        return error_msg
 
 def list_scratch_pad_files(category=None, page=1, page_size=10):
-    """
-    List all available scratch pad files, optionally within a specific category and paginated.
-    """
     try:
+        if not os.path.exists(scratch_pad_dir):
+            return f"Scratch pad directory does not exist: {scratch_pad_dir}"
+        
         files = []
         if category:
             category_path = os.path.join(scratch_pad_dir, category)
@@ -449,7 +472,7 @@ def list_scratch_pad_files(category=None, page=1, page_size=10):
                             files.append(f"{cat}/{f}")
 
         if not files:
-            return "No scratch pad files available."
+            return f"No scratch pad files available in directory: {scratch_pad_dir}"
 
         # Implement pagination
         total_files = len(files)
@@ -466,7 +489,7 @@ def list_scratch_pad_files(category=None, page=1, page_size=10):
         return f"Available scratch pad files (Page {page}/{total_pages}):\n{file_list}"
     except Exception as e:
         logging.error(f"Error listing scratch pad files: {str(e)}")
-        return f"An error occurred while listing scratch pad files: {str(e)}"
+        return f"An error occurred while listing scratch pad files: {str(e)}\nScratch pad directory: {scratch_pad_dir}"
 
 def view_scratch_pad(category, filename):
     """
@@ -543,23 +566,32 @@ def get_current_weather(location, unit='celsius'):
         logging.error(f"Error retrieving weather information: {str(e)}")
         return f"An error occurred while retrieving weather information: {str(e)}"
 
-# Placeholder for image handling functionality
-# def handle_image(image_url):
-#     """
-#     Process an image and provide a description.
-#     """
-#     try:
-#         # Implement image processing here
-#         description = "Image processing functionality is not yet implemented."
-#         logging.info(f"Processed image from URL: {image_url}")
-#         return description
-#     except Exception as e:
-#         logging.error(f"Error processing image: {str(e)}")
-#         return f"An error occurred while processing the image: {str(e)}"
+def gpt4o_interact(query):
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "user", "content": query}
+        ],
+    )
+    logging.info("gpt4o interaction completed")
+    return response.choices[0].message.content
+
+def read_all_scratch_pad_files():
+    all_content = []
+    for category in os.listdir(scratch_pad_dir):
+        category_path = os.path.join(scratch_pad_dir, category)
+        if os.path.isdir(category_path):
+            for filename in os.listdir(category_path):
+                file_path = os.path.join(category_path, filename)
+                if os.path.isfile(file_path):
+                    with open(file_path, 'r') as f:
+                        content = f.read()
+                        all_content.append(f"Category: {category}, File: {filename}\n{content}\n")
+    return "\n".join(all_content)
 
 # Main interaction loop
 def main():
-    print("Welcome to the Enhanced ChatGPT System. Type 'exit', 'quit', or 'bye' to end the conversation.")
+    print("Welcome to the AGI-o1 System. Type 'exit', 'quit', or 'bye' to end the conversation.")
     print("Available Commands:")
     print("  /edit <index> <new_content>                        - Edit a message at a specific index.")
     print("  /remove <index>                                    - Remove a message at a specific index.")
@@ -570,6 +602,20 @@ def main():
     print("  /delete_scratch <category> <filename>              - Delete a scratch pad file within a category.")
     print("  /search_scratch <query>                            - Search for a query string within all scratch pad files.")
     print("-" * 80)
+
+    # Read all scratch pad files
+    scratch_pad_content = read_all_scratch_pad_files()
+
+    # Start the conversation by summarizing scratch pad files
+    initial_query = f"""Here is the content of all scratch pad files:
+
+{scratch_pad_content}
+
+Please summarize this information and suggest a topic or question we could discuss based on it. If there are no files or the content is empty, please mention that and suggest a general topic to discuss and ask for their name. This is the first interaction. Greet the user this way. Make this a two sentence response. You are like alfred to batman. You are the intelligent agent that helps the user with their requests and questions. You are also a personal assistant to the user."""
+
+    response = gpt4o_chat(initial_query)
+    print("\nAI:", response)
+    print("\n" + "-" * 80 + "\n")
 
     while True:
         user_input = input("You: ").strip()
