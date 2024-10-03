@@ -261,14 +261,29 @@ def get_available_functions():
                 "required": ["query"]
             }
         },
+        {
+            "name": "coder",
+            "description": "Generate and run Python code using o1-mini model (Extremely powerful). Only outputs the running code and its output.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The coding task or question"
+                    }
+                },
+                "required": ["query"]
+            }
+        },
     ]
 
 def gpt4o_chat(user_input, is_initial_response=False):
     logging.info(f"User input: {user_input}")
     chat_history.add_message("user", user_input)
     
-    while True:
-        print("Calling GPT-4o for response...")
+    max_iterations = 3  # Limit the number of iterations
+    for iteration in range(max_iterations):
+        print(f"Calling GPT-4o for response... (Iteration {iteration + 1})")
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=chat_history.get_messages(),
@@ -315,6 +330,9 @@ def gpt4o_chat(user_input, is_initial_response=False):
             elif function_name == "assist_user":
                 interaction_result = assist_user(function_args['query'])
                 chat_history.add_message("function", interaction_result, name=function_name)
+            elif function_name == "coder":
+                code_result = coder(function_args['query'])
+                chat_history.add_message("function", code_result, name=function_name)
             else:
                 logging.warning(f"Unknown function call: {function_name}")
                 chat_history.add_message("function", f"Unknown function: {function_name}", name=function_name)
@@ -322,13 +340,15 @@ def gpt4o_chat(user_input, is_initial_response=False):
             if message.content:
                 chat_history.add_message("assistant", message.content)
                 
-                if not is_initial_response:
+                if not is_initial_response and iteration < max_iterations - 1:
                     # Check for missed function calls or unsaved information
                     check_response = client.chat.completions.create(
                         model="gpt-4o",
                         messages=[
-                            {"role": "system", "content": "You are a helpful assistant tasked with checking if any function calls were missed or if any information was not saved in the previous response. If you find any missed actions, please call the appropriate function."},
-                            {"role": "user", "content": f"Previous response: {message.content}\n\nCheck if any function calls were missed or if any information was not saved."}
+                            {"role": "system", "content": "You are a helpful assistant tasked with checking if any function calls were missed or if any information was not saved in the previous response. If you find any missed actions, please call the appropriate function. Pay special attention to saving important information using the save_note function."},
+                            {"role": "user", "content": user_input},
+                            {"role": "assistant", "content": message.content},
+                            {"role": "user", "content": "Check if any function calls were missed or if any information was not saved. If there's any important information that should be saved for future reference, use the save_note function to store it."}
                         ],
                         functions=get_available_functions(),
                         function_call="auto"
@@ -337,14 +357,28 @@ def gpt4o_chat(user_input, is_initial_response=False):
                     check_message = check_response.choices[0].message
                     
                     if check_message.function_call:
-                        print("Missed function call detected. Processing...")
-                        chat_history.add_message("system", "Missed function call detected. Processing...")
-                        continue  # Continue the loop to process the missed function call
+                        print("Missed function call or unsaved information detected. Processing...")
+                        chat_history.add_message("system", "Missed function call or unsaved information detected. Processing...")
+                        
+                        function_name = check_message.function_call.name
+                        function_args = json.loads(check_message.function_call.arguments)
+                        
+                        if function_name == "save_note":
+                            save_note(function_args['category'], function_args['filename'], function_args['content'])
+                            chat_history.add_message("function", f"Saved note to {function_args['category']}/{function_args['filename']}.txt.", name=function_name)
+                        else:
+                            # Handle other function calls as needed
+                            chat_history.add_message("function", f"Processed missed function call: {function_name}", name=function_name)
+                        
+                        continue  # Continue the loop to process any additional missed function calls
                 
                 return message.content  # If no missed calls or initial response, return the original response
             else:
                 logging.warning("Assistant response has no content and no function call")
                 return "I'm sorry, I didn't understand that."
+    
+    # If we've reached the maximum number of iterations, return the last response
+    return "I apologize, but I'm having trouble processing your request. Could you please rephrase or provide more information?"
 
 def deep_reasoning(query):
     response = client.chat.completions.create(
@@ -593,6 +627,30 @@ def read_all_scratch_pad_files():
                         content = f.read()
                         all_content.append(f"Category: {category}, File: {filename}\n{content}\n")
     return "\n".join(all_content)
+
+def coder(query):
+    """
+    Function to generate and run Python code using o1-mini model.
+    """
+    try:
+        response = client.chat.completions.create(
+            model="o1-mini",
+            messages=[
+                {"role": "user", "content": f"Generate and run Python code for the following task: {query}. Only output the running Python code and its output. No explanations or additional text."}
+            ],
+        )
+        logging.info("o1-mini code generation completed")
+
+        # Log O1 response to a separate file
+        o1_response = response.choices[0].message.content
+        o1_log_filename = os.path.join(o1_responses_dir, f"o1_mini_response_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+        with open(o1_log_filename, 'w') as f:
+            f.write(f"Query: {query}\n\nResponse:\n{o1_response}")
+
+        return o1_response
+    except Exception as e:
+        logging.error(f"Error in coder function: {str(e)}")
+        return f"An error occurred while generating or running code: {str(e)}"
 
 # Main interaction loop
 def main():
