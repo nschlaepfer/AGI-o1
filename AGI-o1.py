@@ -34,7 +34,7 @@ class ChatHistory:
                 "You are an advanced AI assistant functioning like a brain with specialized regions. "
                 "Your primary objective is to provide high-quality, thoughtful responses. Key instructions:"
                 "\n1. For ANY task requiring deep thinking, complex reasoning, or that a human would need to contemplate, "
-                "ALWAYS use the 'o1_research' function. This includes but is not limited to:"
+                "ALWAYS use the 'deep_reasoning' function. This includes but is not limited to:"
                 "\n   - Decision-making and problem-solving"
                 "\n   - Logical reasoning and analysis"
                 "\n   - Programming and technical tasks"
@@ -46,19 +46,19 @@ class ChatHistory:
                 "\n   - Any task that requires you to think about what you are doing or thinking."
                 "\n   - Any code related task. "
                 "\n2. Analyze user queries thoroughly to determine if they require deep thinking."
-                "\n3. Use 'librarian' for factual information retrieval when deep analysis isn't needed."
-                "\n4. Use 'gpt4o_interact' for general interaction, writing assistance, and simple explanations."
-                "\n5. Manage your memory proactively using scratch pad functions:"
-                "\n   - 'save_scratch_pad' to store important information"
-                "\n   - 'edit_scratch_pad' to update existing notes"
-                "\n   - 'view_scratch_pad' to recall stored information"
-                "\n   - 'search_scratch_pad' to find relevant data"
-                "\n   - 'list_scratch_pad_files' to review notes"
-                # "\n6. Use 'get_current_weather' for weather-related queries."
+                "\n3. Use 'retrieve_knowledge' for factual information retrieval when deep analysis isn't needed."
+                "\n4. Use 'assist_user' for general interaction, writing assistance, and simple explanations."
+                "\n5. Manage your memory proactively using note functions:"
+                "\n   - 'save_note' to store important information"
+                "\n   - 'edit_note' to update existing notes"
+                "\n   - 'view_note' to recall stored information"
+                "\n   - 'search_notes' to find relevant data"
+                "\n   - 'list_notes' to review notes"
+                "\n6. Use 'fetch_weather' for weather-related queries."
                 "\n7. Always incorporate function results into your final response."
                 "\n8. Provide clear, concise, and accurate information."
-                "\n9. Continuously improve your knowledge by managing information in the scratch pad. Acquire as much information as possible. Actively do this on your OWN."
-                "\nMake independent decisions, prioritizing the use of 'o1_research' for any non-trivial task. "
+                "\n9. Continuously improve your knowledge by managing information in the notes. Acquire as much information as possible. Actively do this on your OWN."
+                "\nMake independent decisions, prioritizing the use of 'deep_reasoning' for any non-trivial task. "
                 "Your goal is to leverage your advanced capabilities to provide thoughtful, well-reasoned responses."
             )
         }
@@ -89,173 +89,173 @@ chat_history = ChatHistory()
 def get_available_functions():
     return [
         {
-            "name": "o1_research",
-            "description": "Perform complex reasoning for decision-making, logical reasoning, programming, and complex STEM tasks.",
+            "name": "deep_reasoning",
+            "description": "Utilize advanced cognitive processing to perform deep reasoning and complex analysis, suitable for intricate decision-making, logical problem-solving, programming challenges, and addressing advanced STEM questions.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "The STEM question to be researched"
+                        "description": "The complex question or problem to analyze"
                     }
                 },
                 "required": ["query"]
             }
         },
         {
-            "name": "librarian",
-            "description": "Retrieve information using OpenAI's Retrieval tool.",
+            "name": "retrieve_knowledge",
+            "description": "Retrieve factual information and knowledge using OpenAI's Retrieval tool.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "The query to search for information"
+                        "description": "The search query for information retrieval"
                     }
                 },
                 "required": ["query"]
             }
         },
         {
-            "name": "save_scratch_pad",
-            "description": "Save content to a scratch pad file within a specified category.",
+            "name": "save_note",
+            "description": "Save a note to the scratch pad under a specified category and filename.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "category": {
                         "type": "string",
-                        "description": "The category under which to save the file."
+                        "description": "The category under which to save the note"
                     },
                     "filename": {
                         "type": "string",
-                        "description": "The name of the file to save the content."
+                        "description": "The name of the file to save the note"
                     },
                     "content": {
                         "type": "string",
-                        "description": "The content to save in the file."
+                        "description": "The content of the note"
                     }
                 },
                 "required": ["category", "filename", "content"]
             }
         },
         {
-            "name": "edit_scratch_pad",
-            "description": "Edit content of an existing scratch pad file within a specified category.",
+            "name": "edit_note",
+            "description": "Edit the content of an existing note in the scratch pad within a specified category.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "category": {
                         "type": "string",
-                        "description": "The category of the file to edit."
+                        "description": "The category of the note to edit"
                     },
                     "filename": {
                         "type": "string",
-                        "description": "The name of the file to edit."
+                        "description": "The name of the note to edit"
                     },
                     "new_content": {
                         "type": "string",
-                        "description": "The new content to replace the existing content."
+                        "description": "The new content to replace the existing note"
                     }
                 },
                 "required": ["category", "filename", "new_content"]
             }
         },
         {
-            "name": "list_scratch_pad_files",
-            "description": "List all available scratch pad files, optionally within a specific category and paginated.",
+            "name": "list_notes",
+            "description": "List all notes in the scratch pad, optionally filtered by category and page.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "category": {
                         "type": "string",
-                        "description": "The category to list files from. If omitted, lists from all categories."
+                        "description": "Optional category to filter notes"
                     },
                     "page": {
                         "type": "integer",
-                        "description": "The page number to display."
+                        "description": "Optional page number for pagination"
                     }
                 },
                 "required": []
             }
         },
         {
-            "name": "view_scratch_pad",
-            "description": "View the content of a scratch pad file within a specified category.",
+            "name": "view_note",
+            "description": "Display the content of a specific note from the scratch pad within a specified category.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "category": {
                         "type": "string",
-                        "description": "The category of the file to view."
+                        "description": "The category of the note to view"
                     },
                     "filename": {
                         "type": "string",
-                        "description": "The name of the file to view."
+                        "description": "The name of the note to view"
                     }
                 },
                 "required": ["category", "filename"]
             }
         },
         {
-            "name": "delete_scratch_pad",
-            "description": "Delete a scratch pad file within a specified category.",
+            "name": "delete_note",
+            "description": "Delete a note from the scratch pad within a specified category.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "category": {
                         "type": "string",
-                        "description": "The category of the file to delete."
+                        "description": "The category of the note to delete"
                     },
                     "filename": {
                         "type": "string",
-                        "description": "The name of the file to delete."
+                        "description": "The name of the note to delete"
                     }
                 },
                 "required": ["category", "filename"]
             }
         },
         {
-            "name": "search_scratch_pad",
-            "description": "Search for a query string within all scratch pad files.",
+            "name": "search_notes",
+            "description": "Search for a specific query within all notes in the scratch pad.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "The string to search for within scratch pad files."
+                        "description": "The search query string"
                     }
                 },
                 "required": ["query"]
             }
         },
         {
-            "name": "get_current_weather",
-            "description": "Get the current weather in a given location.",
+            "name": "fetch_weather",
+            "description": "Retrieve the current weather information for a specified location.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "location": {
                         "type": "string",
-                        "description": "The city and state, e.g. San Francisco, CA"
+                        "description": "The location (city and state/country) for weather information"
                     },
                     "unit": {
                         "type": "string",
                         "enum": ["celsius", "fahrenheit"],
-                        "description": "Unit for temperature."
+                        "description": "Optional temperature unit"
                     }
                 },
                 "required": ["location"]
             }
         },
         {
-            "name": "gpt4o_interact",
-            "description": "Interact with the user, assist with writing, and explain concepts using GPT-4o.",
+            "name": "assist_user",
+            "description": "Provide general assistance, interact with the user, and offer explanations using GPT-4o.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "The user's input that requires interaction or explanation."
+                        "description": "The user's request or question"
                     }
                 },
                 "required": ["query"]
@@ -263,85 +263,90 @@ def get_available_functions():
         },
     ]
 
-def gpt4o_chat(user_input):
+def gpt4o_chat(user_input, is_initial_response=False):
     logging.info(f"User input: {user_input}")
     chat_history.add_message("user", user_input)
-    print("Calling GPT-4o for initial response...")
     
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=chat_history.get_messages(),
-        functions=get_available_functions(),
-        function_call="auto"
-    )
-
-    message = response.choices[0].message
-
-    if message.content:
-        print(f"Initial response: {message.content[:50]}...")
-    else:
-        print("Model chose to use a function call instead of responding directly.")
-
-    if message.function_call:
-        function_name = message.function_call.name
-        print(f"Function call: {function_name}")
-        function_args = json.loads(message.function_call.arguments)
-        logging.info(f"Function call detected: {function_name} with args {function_args}")
-
-        # Handle function calls
-        if function_name == "o1_research":
-            research_result = o1_research(function_args['query'])
-            # Add function result to chat history with the 'name' parameter
-            chat_history.add_message("function", research_result, name=function_name)
-        elif function_name == "librarian":
-            librarian_result = librarian(function_args['query'])
-            chat_history.add_message("function", librarian_result, name=function_name)
-        elif function_name == "save_scratch_pad":
-            save_scratch_pad(function_args['category'], function_args['filename'], function_args['content'])
-            chat_history.add_message("function", f"Saved content to {function_args['category']}/{function_args['filename']}.txt.", name=function_name)
-        elif function_name == "edit_scratch_pad":
-            edit_scratch_pad(function_args['category'], function_args['filename'], function_args['new_content'])
-            chat_history.add_message("function", f"Edited content of {function_args['category']}/{function_args['filename']}.txt.", name=function_name)
-        elif function_name == "list_scratch_pad_files":
-            files = list_scratch_pad_files(function_args.get('category'), function_args.get('page'))
-            chat_history.add_message("function", files, name=function_name)
-        elif function_name == "view_scratch_pad":
-            content = view_scratch_pad(function_args['category'], function_args['filename'])
-            chat_history.add_message("function", content, name=function_name)
-        elif function_name == "delete_scratch_pad":
-            result = delete_scratch_pad(function_args['category'], function_args['filename'])
-            chat_history.add_message("function", result, name=function_name)
-        elif function_name == "search_scratch_pad":
-            search_results = search_scratch_pad(function_args['query'])
-            chat_history.add_message("function", search_results, name=function_name)
-        elif function_name == "get_current_weather":
-            weather_result = get_current_weather(function_args['location'], function_args.get('unit', 'celsius'))
-            chat_history.add_message("function", weather_result, name=function_name)
-        elif function_name == "gpt4o_interact":
-            interaction_result = gpt4o_interact(function_args['query'])
-            chat_history.add_message("function", interaction_result, name=function_name)
-        else:
-            logging.warning(f"Unknown function call: {function_name}")
-            chat_history.add_message("function", f"Unknown function: {function_name}", name=function_name)
-
-        # Call GPT-4o again with the function response
-        logging.info("Calling GPT-4o for final response with function results...")
-        print("Calling GPT-4o for final response with function results...")
-        final_response = client.chat.completions.create(
+    while True:
+        print("Calling GPT-4o for response...")
+        response = client.chat.completions.create(
             model="gpt-4o",
-            messages=chat_history.get_messages()
+            messages=chat_history.get_messages(),
+            functions=get_available_functions(),
+            function_call="auto"
         )
-        final_message = final_response.choices[0].message
-        print(f"Final response type: {final_message.content[:50]}...")
-        chat_history.add_message("assistant", final_message.content)
-        return final_message.content
-    else:
-        logging.info("No function call detected, returning initial response")
-        print("No function call detected, returning initial response")
-        chat_history.add_message("assistant", message.content)
-        return message.content
 
-def o1_research(query):
+        message = response.choices[0].message
+
+        if message.function_call:
+            function_name = message.function_call.name
+            print(f"Function call detected: {function_name}")
+            function_args = json.loads(message.function_call.arguments)
+            logging.info(f"Function call detected: {function_name} with args {function_args}")
+
+            # Handle function calls
+            if function_name == "deep_reasoning":
+                research_result = deep_reasoning(function_args['query'])
+                chat_history.add_message("function", research_result, name=function_name)
+            elif function_name == "retrieve_knowledge":
+                librarian_result = retrieve_knowledge(function_args['query'])
+                chat_history.add_message("function", librarian_result, name=function_name)
+            elif function_name == "save_note":
+                save_note(function_args['category'], function_args['filename'], function_args['content'])
+                chat_history.add_message("function", f"Saved note to {function_args['category']}/{function_args['filename']}.txt.", name=function_name)
+            elif function_name == "edit_note":
+                edit_note_result = edit_note(function_args['category'], function_args['filename'], function_args['new_content'])
+                chat_history.add_message("function", edit_note_result, name=function_name)
+            elif function_name == "list_notes":
+                files = list_notes(function_args.get('category'), function_args.get('page', 1))
+                chat_history.add_message("function", files, name=function_name)
+            elif function_name == "view_note":
+                content = view_note(function_args['category'], function_args['filename'])
+                chat_history.add_message("function", content, name=function_name)
+            elif function_name == "delete_note":
+                result = delete_note(function_args['category'], function_args['filename'])
+                chat_history.add_message("function", result, name=function_name)
+            elif function_name == "search_notes":
+                search_results = search_notes(function_args['query'])
+                chat_history.add_message("function", search_results, name=function_name)
+            elif function_name == "fetch_weather":
+                weather_result = fetch_weather(function_args['location'], function_args.get('unit', 'celsius'))
+                chat_history.add_message("function", weather_result, name=function_name)
+            elif function_name == "assist_user":
+                interaction_result = assist_user(function_args['query'])
+                chat_history.add_message("function", interaction_result, name=function_name)
+            else:
+                logging.warning(f"Unknown function call: {function_name}")
+                chat_history.add_message("function", f"Unknown function: {function_name}", name=function_name)
+        else:
+            if message.content:
+                chat_history.add_message("assistant", message.content)
+                
+                if not is_initial_response:
+                    # Check for missed function calls or unsaved information
+                    check_response = client.chat.completions.create(
+                        model="gpt-4o",
+                        messages=[
+                            {"role": "system", "content": "You are a helpful assistant tasked with checking if any function calls were missed or if any information was not saved in the previous response. If you find any missed actions, please call the appropriate function."},
+                            {"role": "user", "content": f"Previous response: {message.content}\n\nCheck if any function calls were missed or if any information was not saved."}
+                        ],
+                        functions=get_available_functions(),
+                        function_call="auto"
+                    )
+                    
+                    check_message = check_response.choices[0].message
+                    
+                    if check_message.function_call:
+                        print("Missed function call detected. Processing...")
+                        chat_history.add_message("system", "Missed function call detected. Processing...")
+                        continue  # Continue the loop to process the missed function call
+                
+                return message.content  # If no missed calls or initial response, return the original response
+            else:
+                logging.warning("Assistant response has no content and no function call")
+                return "I'm sorry, I didn't understand that."
+
+def deep_reasoning(query):
     response = client.chat.completions.create(
         model="o1-preview",
         messages=[
@@ -358,7 +363,7 @@ def o1_research(query):
 
     return o1_response
 
-def librarian(query):
+def retrieve_knowledge(query):
     """
     Function to manage information using OpenAI's Retrieval tool.
     """
@@ -408,7 +413,7 @@ def librarian(query):
         logging.error(f"Error in librarian function: {str(e)}")
         return f"An error occurred while retrieving information: {str(e)}"
 
-def save_scratch_pad(category, filename, content):
+def save_note(category, filename, content):
     """
     Save content to a scratch pad file within a specified category.
     """
@@ -422,7 +427,7 @@ def save_scratch_pad(category, filename, content):
     except Exception as e:
         logging.error(f"Error saving scratch pad file {filename} in category {category}: {str(e)}")
 
-def edit_scratch_pad(category, filename, new_content):
+def edit_note(category, filename, new_content):
     """
     Edit content of an existing scratch pad file within a specified category.
     If the file doesn't exist, create it.
@@ -450,7 +455,7 @@ def edit_scratch_pad(category, filename, new_content):
         logging.error(error_msg)
         return error_msg
 
-def list_scratch_pad_files(category=None, page=1, page_size=10):
+def list_notes(category=None, page=1, page_size=10):
     try:
         if not os.path.exists(scratch_pad_dir):
             return f"Scratch pad directory does not exist: {scratch_pad_dir}"
@@ -491,7 +496,7 @@ def list_scratch_pad_files(category=None, page=1, page_size=10):
         logging.error(f"Error listing scratch pad files: {str(e)}")
         return f"An error occurred while listing scratch pad files: {str(e)}\nScratch pad directory: {scratch_pad_dir}"
 
-def view_scratch_pad(category, filename):
+def view_note(category, filename):
     """
     View the content of a scratch pad file within a specified category.
     """
@@ -509,7 +514,7 @@ def view_scratch_pad(category, filename):
         logging.error(f"Error viewing scratch pad file {filename} in category {category}: {str(e)}")
         return f"An error occurred while viewing the scratch pad file: {str(e)}"
 
-def delete_scratch_pad(category, filename):
+def delete_note(category, filename):
     """
     Delete a scratch pad file within a specified category.
     """
@@ -526,7 +531,7 @@ def delete_scratch_pad(category, filename):
         logging.error(f"Error deleting scratch pad file {filename} in category {category}: {str(e)}")
         return f"An error occurred while deleting the scratch pad file: {str(e)}"
 
-def search_scratch_pad(query):
+def search_notes(query):
     """
     Search for a query string within all scratch pad files.
     Returns a list of files that contain the query string.
@@ -552,7 +557,7 @@ def search_scratch_pad(query):
         logging.error(f"Error searching scratch pad files: {str(e)}")
         return f"An error occurred while searching scratch pad files: {str(e)}"
 
-def get_current_weather(location, unit='celsius'):
+def fetch_weather(location, unit='celsius'):
     """
     Get the current weather in a given location.
     This is a placeholder implementation. You should integrate with a real weather API.
@@ -566,7 +571,7 @@ def get_current_weather(location, unit='celsius'):
         logging.error(f"Error retrieving weather information: {str(e)}")
         return f"An error occurred while retrieving weather information: {str(e)}"
 
-def gpt4o_interact(query):
+def assist_user(query):
     response = client.chat.completions.create(
         model="gpt-4o",
         messages=[
@@ -593,14 +598,14 @@ def read_all_scratch_pad_files():
 def main():
     print("Welcome to the AGI-o1 System. Type 'exit', 'quit', or 'bye' to end the conversation.")
     print("Available Commands:")
-    print("  /edit <index> <new_content>                        - Edit a message at a specific index.")
-    print("  /remove <index>                                    - Remove a message at a specific index.")
-    print("  /save <category> <filename> <content>              - Save content to a scratch pad file within a category.")
-    print("  /edit_scratch <category> <filename> <new_content>  - Edit an existing scratch pad file within a category.")
-    print("  /list_scratch_pad [category] [page]                - List scratch pad files, optionally within a category and paginated.")
-    print("  /view_scratch <category> <filename>                - View the content of a scratch pad file within a category.")
-    print("  /delete_scratch <category> <filename>              - Delete a scratch pad file within a category.")
-    print("  /search_scratch <query>                            - Search for a query string within all scratch pad files.")
+    print("  /edit <index> <new_content>                - Edit a message at a specific index.")
+    print("  /remove <index>                            - Remove a message at a specific index.")
+    print("  /save_note <category> <filename> <content> - Save a note to the scratch pad.")
+    print("  /edit_note <category> <filename> <new_content> - Edit an existing note.")
+    print("  /list_notes [category] [page]              - List notes, optionally within a category and paginated.")
+    print("  /view_note <category> <filename>           - View the content of a note.")
+    print("  /delete_note <category> <filename>         - Delete a note.")
+    print("  /search_notes <query>                      - Search for a query string within all notes.")
     print("-" * 80)
 
     # Read all scratch pad files
@@ -613,7 +618,7 @@ def main():
 
 Please summarize this information and suggest a topic or question we could discuss based on it. If there are no files or the content is empty, please mention that and suggest a general topic to discuss and ask for their name. This is the first interaction. Greet the user this way. Make this a two sentence response. You are like alfred to batman. You are the intelligent agent that helps the user with their requests and questions. You are also a personal assistant to the user."""
 
-    response = gpt4o_chat(initial_query)
+    response = gpt4o_chat(initial_query, is_initial_response=True)
     print("\nAI:", response)
     print("\n" + "-" * 80 + "\n")
 
@@ -650,32 +655,32 @@ Please summarize this information and suggest a topic or question we could discu
             else:
                 print("Invalid remove command format. Use: /remove <index>")
             continue
-        elif user_input.startswith("/save "):
-            # Parse save command: /save <category> <filename> <content>
+        elif user_input.startswith("/save_note "):
+            # Parse save command: /save_note <category> <filename> <content>
             parts = user_input.split(maxsplit=3)
             if len(parts) == 4:
                 category = parts[1]
                 filename = parts[2]
                 content = parts[3]
-                save_scratch_pad(category, filename, content)
+                save_note(category, filename, content)
                 print(f"Content saved to scratch pad as '{category}/{filename}.txt'.")
             else:
-                print("Invalid save command format. Use: /save <category> <filename> <content>")
+                print("Invalid save_note command format. Use: /save_note <category> <filename> <content>")
             continue
-        elif user_input.startswith("/edit_scratch "):
-            # Parse edit scratch pad command: /edit_scratch <category> <filename> <new_content>
+        elif user_input.startswith("/edit_note "):
+            # Parse edit scratch pad command: /edit_note <category> <filename> <new_content>
             parts = user_input.split(maxsplit=4)
             if len(parts) == 4:
                 category = parts[1]
                 filename = parts[2]
                 new_content = parts[3]
-                edit_scratch_pad(category, filename, new_content)
+                edit_note(category, filename, new_content)
                 print(f"Scratch pad '{category}/{filename}.txt' edited.")
             else:
-                print("Invalid edit_scratch command format. Use: /edit_scratch <category> <filename> <new_content>")
+                print("Invalid edit_note command format. Use: /edit_note <category> <filename> <new_content>")
             continue
-        elif user_input.startswith("/list_scratch_pad"):
-            # Parse list_scratch_pad command: /list_scratch_pad [category] [page]
+        elif user_input.startswith("/list_notes"):
+            # Parse list_scratch_pad command: /list_notes [category] [page]
             parts = user_input.split(maxsplit=3)
             category = None
             page = 1
@@ -687,40 +692,40 @@ Please summarize this information and suggest a topic or question we could discu
                 except ValueError:
                     print("Invalid page number. It must be an integer.")
                     continue
-            files = list_scratch_pad_files(category, page)
+            files = list_notes(category, page)
             print(files)
             continue
-        elif user_input.startswith("/view_scratch "):
-            # Parse view scratch pad command: /view_scratch <category> <filename>
+        elif user_input.startswith("/view_note "):
+            # Parse view scratch pad command: /view_note <category> <filename>
             parts = user_input.split(maxsplit=2)
             if len(parts) == 3:
                 category = parts[1]
                 filename = parts[2]
-                content = view_scratch_pad(category, filename)
+                content = view_note(category, filename)
                 print(content)
             else:
-                print("Invalid view_scratch command format. Use: /view_scratch <category> <filename>")
+                print("Invalid view_note command format. Use: /view_note <category> <filename>")
             continue
-        elif user_input.startswith("/delete_scratch "):
-            # Parse delete scratch pad command: /delete_scratch <category> <filename>
+        elif user_input.startswith("/delete_note "):
+            # Parse delete scratch pad command: /delete_note <category> <filename>
             parts = user_input.split(maxsplit=2)
             if len(parts) == 3:
                 category = parts[1]
                 filename = parts[2]
-                result = delete_scratch_pad(category, filename)
+                result = delete_note(category, filename)
                 print(result)
             else:
-                print("Invalid delete_scratch command format. Use: /delete_scratch <category> <filename>")
+                print("Invalid delete_note command format. Use: /delete_note <category> <filename>")
             continue
-        elif user_input.startswith("/search_scratch "):
-            # Parse search scratch pad command: /search_scratch <query>
+        elif user_input.startswith("/search_notes "):
+            # Parse search scratch pad command: /search_notes <query>
             parts = user_input.split(maxsplit=1)
             if len(parts) == 2:
                 query = parts[1]
-                results = search_scratch_pad(query)
+                results = search_notes(query)
                 print(results)
             else:
-                print("Invalid search_scratch command format. Use: /search_scratch <query>")
+                print("Invalid search_notes command format. Use: /search_notes <query>")
             continue
         # Add more custom commands as needed
 
