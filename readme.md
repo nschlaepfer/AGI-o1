@@ -359,7 +359,6 @@ This project is licensed under the [MIT License](LICENSE).
 
 For questions, suggestions, or support, please contact:
 
-- **Email**: your.email@example.com
 - **GitHub**: [@nschlaepfer](https://github.com/nschlaepfer)
 
 ---
@@ -440,4 +439,3 @@ To make the README even more effective, consider the following enhancements:
 
 ---
 
-By implementing these enhancements, the README will become a comprehensive guide that effectively communicates the purpose, setup, and usage of AGI-o1, making it more accessible and user-friendly.
