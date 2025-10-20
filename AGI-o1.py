@@ -8,6 +8,7 @@ from collections import deque
 from typing import Dict, Optional, List, Any, Tuple
 from pathlib import Path
 import re
+from uuid import uuid4
 
 from reasoning_bank import ReasoningBank
 
@@ -244,6 +245,32 @@ class ChatHistory:
             message["name"] = name
         self.messages.append(message)
 
+    def add_raw_message(self, message: Dict[str, Any]) -> None:
+        """
+        Append a pre-constructed message dictionary to the history.
+        """
+        self.messages.append(dict(message))
+
+    def add_tool_message(self, tool_call_id: str, content: Any, name: Optional[str] = None):
+        """
+        Append a tool (function) response using the modern tool role format.
+        """
+        if isinstance(content, str):
+            rendered_content = content
+        else:
+            try:
+                rendered_content = json.dumps(content)
+            except TypeError:
+                rendered_content = str(content)
+        message = {
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": rendered_content,
+        }
+        if name:
+            message["name"] = name
+        self.messages.append(message)
+
     def get_messages(self, memory_prompt: Optional[str] = None):
         messages = [dict(self.system_message)]
         if memory_prompt:
@@ -261,6 +288,18 @@ class ChatHistory:
             name = msg.get("name")
             prefix = f"{role}" + (f"({name})" if name else "")
             content = msg.get("content", "")
+            if isinstance(content, list):
+                content = json.dumps(content)
+            if not content:
+                if msg.get("tool_calls"):
+                    call_names = ", ".join(
+                        tc.get("function", {}).get("name", "unknown")
+                        for tc in msg.get("tool_calls", [])
+                    )
+                    content = f"[tool call -> {call_names}]"
+                elif msg.get("function_call"):
+                    fn = msg["function_call"]
+                    content = f"[function call -> {fn.get('name', 'unknown')}]"
             lines.append(f"{prefix}: {content}")
         return "\n".join(lines)
 
@@ -273,6 +312,18 @@ class ChatHistory:
             name = msg.get("name")
             prefix = f"{role}" + (f"({name})" if name else "")
             content = msg.get("content", "")
+            if isinstance(content, list):
+                content = json.dumps(content)
+            if not content:
+                if msg.get("tool_calls"):
+                    call_names = ", ".join(
+                        tc.get("function", {}).get("name", "unknown")
+                        for tc in msg.get("tool_calls", [])
+                    )
+                    content = f"[tool call -> {call_names}]"
+                elif msg.get("function_call"):
+                    fn = msg["function_call"]
+                    content = f"[function call -> {fn.get('name', 'unknown')}]"
             lines.append(f"{prefix}: {content}")
         return "\n".join(lines)
 
@@ -487,6 +538,52 @@ def get_available_functions():
         },
     ]
 
+
+def get_available_tools():
+    """
+    Convert function specifications into the tools schema expected by newer models.
+    """
+    return [{"type": "function", "function": spec} for spec in get_available_functions()]
+
+
+def _execute_tool(function_name: str, function_args: Dict[str, Any]) -> str:
+    """
+    Dispatch a function/tool call and return a textual result.
+    """
+    try:
+        if function_name == "deep_reasoning":
+            return deep_reasoning(function_args["query"])
+        if function_name == "retrieve_knowledge":
+            return retrieve_knowledge(function_args["query"])
+        if function_name == "save_note":
+            save_note(function_args["category"], function_args["filename"], function_args["content"])
+            return f"Saved note to docs/paper.txt as {function_args['category']}/{function_args['filename']}."
+        if function_name == "edit_note":
+            return edit_note(function_args["category"], function_args["filename"], function_args["new_content"])
+        if function_name == "list_notes":
+            return list_notes(function_args.get("category"), function_args.get("page", 1))
+        if function_name == "view_note":
+            return view_note(function_args["category"], function_args["filename"])
+        if function_name == "delete_note":
+            return delete_note(function_args["category"], function_args["filename"])
+        if function_name == "search_notes":
+            return search_notes(function_args["query"])
+        if function_name == "fetch_weather":
+            return fetch_weather(function_args["location"], function_args.get("unit", "celsius"))
+        if function_name == "assist_user":
+            return assist_user(function_args["query"])
+        if function_name == "coder":
+            return coder(function_args["query"])
+        logging.warning("Unknown function call requested: %s", function_name)
+        return f"Unknown function: {function_name}"
+    except KeyError as missing:
+        logging.error("Missing argument '%s' for function '%s'. Args: %s", missing, function_name, function_args)
+        return f"Missing argument '{missing}' for function '{function_name}'."
+    except Exception as exc:
+        logging.exception("Error executing function '%s': %s", function_name, exc)
+        return f"Error while executing '{function_name}': {exc}"
+
+
 def gpt4o_chat(user_input, is_initial_response=False, chat: ChatHistory = None):
     if chat is None:
         chat = chat_history
@@ -509,121 +606,182 @@ def gpt4o_chat(user_input, is_initial_response=False, chat: ChatHistory = None):
         response = client.chat.completions.create(
             model=MODEL_ASSISTANT,
             messages=chat.get_messages(memory_prompt=memory_prompt),
-            functions=get_available_functions(),
-            function_call="auto"
+            tools=get_available_tools(),
+            tool_choice="auto"
         )
 
         message = response.choices[0].message
 
+        tool_calls = getattr(message, "tool_calls", None) or []
+        if tool_calls:
+            structured_message = {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": getattr(tc, "type", "function"),
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        },
+                    }
+                    for tc in tool_calls
+                ],
+            }
+            chat.add_raw_message(structured_message)
+            for tool_call in tool_calls:
+                function_name = tool_call.function.name
+                print(f"Function call detected: {function_name}")
+                try:
+                    function_args = json.loads(tool_call.function.arguments or "{}")
+                except json.JSONDecodeError:
+                    logging.warning("Failed to decode arguments for %s: %s", function_name, tool_call.function.arguments)
+                    function_args = {}
+                logging.info("Function call detected: %s with args %s", function_name, function_args)
+                tool_result = _execute_tool(function_name, function_args)
+                chat.add_tool_message(tool_call.id, tool_result, name=function_name)
+            continue
+
         if message.function_call:
+            structured_message = {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": getattr(message.function_call, "id", f"legacy_{uuid4().hex}"),
+                        "type": "function",
+                        "function": {
+                            "name": message.function_call.name,
+                            "arguments": message.function_call.arguments,
+                        },
+                    }
+                ],
+            }
+            chat.add_raw_message(structured_message)
             function_name = message.function_call.name
             print(f"Function call detected: {function_name}")
-            function_args = json.loads(message.function_call.arguments)
-            logging.info(f"Function call detected: {function_name} with args {function_args}")
+            try:
+                function_args = json.loads(message.function_call.arguments or "{}")
+            except json.JSONDecodeError:
+                logging.warning("Failed to decode arguments for %s: %s", function_name, message.function_call.arguments)
+                function_args = {}
+            logging.info("Function call detected: %s with args %s", function_name, function_args)
+            tool_call_id = getattr(message.function_call, "id", None) or f"legacy_{uuid4().hex}"
+            tool_result = _execute_tool(function_name, function_args)
+            chat.add_tool_message(tool_call_id, tool_result, name=function_name)
+            continue
 
-            # Handle function calls
-            if function_name == "deep_reasoning":
-                research_result = deep_reasoning(function_args['query'])
-                chat.add_message("function", research_result, name=function_name)
-            elif function_name == "retrieve_knowledge":
-                librarian_result = retrieve_knowledge(function_args['query'])
-                chat.add_message("function", librarian_result, name=function_name)
-            elif function_name == "save_note":
-                save_note(function_args['category'], function_args['filename'], function_args['content'])
-                chat.add_message("function", f"Saved note to docs/paper.txt as {function_args['category']}/{function_args['filename']}.", name=function_name)
-            elif function_name == "edit_note":
-                edit_note_result = edit_note(function_args['category'], function_args['filename'], function_args['new_content'])
-                chat.add_message("function", edit_note_result, name=function_name)
-            elif function_name == "list_notes":
-                files = list_notes(function_args.get('category'), function_args.get('page', 1))
-                chat.add_message("function", files, name=function_name)
-            elif function_name == "view_note":
-                content = view_note(function_args['category'], function_args['filename'])
-                chat.add_message("function", content, name=function_name)
-            elif function_name == "delete_note":
-                result = delete_note(function_args['category'], function_args['filename'])
-                chat.add_message("function", result, name=function_name)
-            elif function_name == "search_notes":
-                search_results = search_notes(function_args['query'])
-                chat.add_message("function", search_results, name=function_name)
-            elif function_name == "fetch_weather":
-                weather_result = fetch_weather(function_args['location'], function_args.get('unit', 'celsius'))
-                chat.add_message("function", weather_result, name=function_name)
-            elif function_name == "assist_user":
-                interaction_result = assist_user(function_args['query'])
-                chat.add_message("function", interaction_result, name=function_name)
-            elif function_name == "coder":
-                code_result = coder(function_args['query'])
-                chat.add_message("function", code_result, name=function_name)
-            else:
-                logging.warning(f"Unknown function call: {function_name}")
-                chat.add_message("function", f"Unknown function: {function_name}", name=function_name)
-        else:
-            if message.content:
-                chat.add_message("assistant", message.content)
+        if message.content:
+            chat.add_message("assistant", message.content)
 
-                if not is_initial_response and iteration < max_iterations - 1:
-                    # Check for missed function calls or unsaved information
-                    check_response = client.chat.completions.create(
-                        model=MODEL_ASSISTANT,
-                        messages=[
-                            {"role": "system", "content": "You are a helpful assistant tasked with checking if any function calls were missed or if any information was not saved in the previous response. If you find any missed actions, please call the appropriate function. Pay special attention to saving important information using the save_note function."},
-                            {"role": "user", "content": user_input},
-                            {"role": "assistant", "content": message.content},
-                            {"role": "user", "content": "Check if any function calls were missed or if any information was not saved. If there's any important information that should be saved for future reference, use the save_note function to store it."}
+            if not is_initial_response and iteration < max_iterations - 1:
+                # Check for missed function calls or unsaved information
+                check_response = client.chat.completions.create(
+                    model=MODEL_ASSISTANT,
+                    messages=[
+                        {"role": "system", "content": "You are a helpful assistant tasked with checking if any function calls were missed or if any information was not saved in the previous response. If you find any missed actions, please call the appropriate function. Pay special attention to saving important information using the save_note function."},
+                        {"role": "user", "content": user_input},
+                        {"role": "assistant", "content": message.content},
+                        {"role": "user", "content": "Check if any function calls were missed or if any information was not saved. If there's any important information that should be saved for future reference, use the save_note function to store it."}
+                    ],
+                    tools=get_available_tools(),
+                    tool_choice="auto"
+                )
+
+                check_message = check_response.choices[0].message
+
+                check_tool_calls = getattr(check_message, "tool_calls", None) or []
+                if check_tool_calls:
+                    print("Missed function call or unsaved information detected. Processing...")
+                    structured_message = {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": tc.id,
+                                "type": getattr(tc, "type", "function"),
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments,
+                                },
+                            }
+                            for tc in check_tool_calls
                         ],
-                        functions=get_available_functions(),
-                        function_call="auto"
-                    )
+                    }
+                    chat.add_raw_message(structured_message)
 
-                    check_message = check_response.choices[0].message
+                    for tool_call in check_tool_calls:
+                        function_name = tool_call.function.name
+                        try:
+                            function_args = json.loads(tool_call.function.arguments or "{}")
+                        except json.JSONDecodeError:
+                            logging.warning("Failed to decode arguments for %s during missed call handling: %s", function_name, tool_call.function.arguments)
+                            function_args = {}
+                        tool_result = _execute_tool(function_name, function_args)
+                        chat.add_tool_message(tool_call.id, tool_result, name=function_name)
 
-                    if check_message.function_call:
-                        print("Missed function call or unsaved information detected. Processing...")
-                        chat.add_message("system", "Missed function call or unsaved information detected. Processing...")
+                    continue  # Continue the loop to process any additional missed function calls
 
-                        function_name = check_message.function_call.name
-                        function_args = json.loads(check_message.function_call.arguments)
+                if check_message.function_call:
+                    print("Missed function call or unsaved information detected. Processing...")
+                    structured_message = {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": getattr(check_message.function_call, "id", f"legacy_{uuid4().hex}"),
+                                "type": "function",
+                                "function": {
+                                    "name": check_message.function_call.name,
+                                    "arguments": check_message.function_call.arguments,
+                                },
+                            }
+                        ],
+                    }
+                    chat.add_raw_message(structured_message)
 
-                        if function_name == "save_note":
-                            save_note(function_args['category'], function_args['filename'], function_args['content'])
-                            chat.add_message("function", f"Saved note to docs/paper.txt as {function_args['category']}/{function_args['filename']}.", name=function_name)
-                        else:
-                            # Handle other function calls as needed
-                            chat.add_message("function", f"Processed missed function call: {function_name}", name=function_name)
-
-                        continue  # Continue the loop to process any additional missed function calls
-
-                if message.content:
-                    _log_response("assistant_chat", message.content)
-                if reasoning_bank and not is_initial_response:
+                    function_name = check_message.function_call.name
                     try:
-                        transcript = chat.recent_dialogue(turns=6)
-                        memory_ids = [item["item"].id for item in retrieved_memory if item.get("item")]
-                        evaluation = evaluate_interaction(
-                            task=user_input,
-                            agent_output=message.content,
-                            transcript=transcript,
-                        )
-                        reasoning_bank.process_interaction(
-                            task=user_input,
-                            agent_output=message.content,
-                            transcript=transcript,
-                            metadata={
-                                "source": "assistant_chat",
-                                "memory_ids": memory_ids,
-                                "evaluation": evaluation,
-                            },
-                            outcome=evaluation.get("outcome"),
-                        )
-                        if evaluation:
-                            print("\n[Evaluation]\n" + json.dumps(evaluation, indent=2) + "\n")
-                    except Exception as exc:
-                        logging.warning("ReasoningBank update error: %s", exc)
-                return message.content  # If no missed calls or initial response, return the original response
-            else:
-                logging.warning("Assistant response has no content and no function call")
-                return "I'm sorry, I didn't understand that."
+                        function_args = json.loads(check_message.function_call.arguments or "{}")
+                    except json.JSONDecodeError:
+                        logging.warning("Failed to decode arguments for %s during legacy missed call handling: %s", function_name, check_message.function_call.arguments)
+                        function_args = {}
+                    tool_call_id = getattr(check_message.function_call, "id", None) or f"legacy_{uuid4().hex}"
+                    tool_result = _execute_tool(function_name, function_args)
+                    chat.add_tool_message(tool_call_id, tool_result, name=function_name)
+
+                    continue  # Continue the loop to process any additional missed function calls
+
+            _log_response("assistant_chat", message.content)
+            if reasoning_bank and not is_initial_response:
+                try:
+                    transcript = chat.recent_dialogue(turns=6)
+                    memory_ids = [item["item"].id for item in retrieved_memory if item.get("item")]
+                    evaluation = evaluate_interaction(
+                        task=user_input,
+                        agent_output=message.content,
+                        transcript=transcript,
+                    )
+                    reasoning_bank.process_interaction(
+                        task=user_input,
+                        agent_output=message.content,
+                        transcript=transcript,
+                        metadata={
+                            "source": "assistant_chat",
+                            "memory_ids": memory_ids,
+                            "evaluation": evaluation,
+                        },
+                        outcome=evaluation.get("outcome"),
+                    )
+                    if evaluation:
+                        print("\n[Evaluation]\n" + json.dumps(evaluation, indent=2) + "\n")
+                except Exception as exc:
+                    logging.warning("ReasoningBank update error: %s", exc)
+            return message.content  # If no missed calls or initial response, return the original response
+
+        logging.warning("Assistant response has no content and no function call")
+        return "I'm sorry, I didn't understand that."
 
     # If we've reached the maximum number of iterations, return the last response
     return "I apologize, but I'm having trouble processing your request. Could you please rephrase or provide more information?"
@@ -1647,8 +1805,8 @@ def example_weather():
     completion = client.chat.completions.create(
         model=MODEL_ASSISTANT,
         messages=messages,
-        functions=tools,
-        function_call="auto"
+        tools=tools,
+        tool_choice="auto"
     )
 
     print(completion)
