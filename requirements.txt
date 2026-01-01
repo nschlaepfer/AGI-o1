@@ -1,2 +1,10 @@
-openai
-python-dotenv
+# AGI-o1 Dependencies
+# OpenAI SDK with GPT-5.2 and Codex support
+openai>=1.60.0
+
+# Environment configuration
+python-dotenv>=1.0.0
+
+# Optional: OpenAI Agents SDK for MCP server integration
+# pip install openai-agents
+# openai-agents>=0.5.0

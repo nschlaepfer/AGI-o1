@@ -21,19 +21,30 @@
 
 ## Overview
 
-**AGI-o1** is an advanced AI assistant built using OpenAI's GPT-4 architecture. Designed to handle complex user queries, perform specialized research, manage information efficiently, and provide seamless interactions through a command-line interface, AGI-o1 leverages a scratch pad system for storing and retrieving information. It integrates various functionalities like weather retrieval and is extensible for future enhancements such as image processing.
+**AGI-o1** is an advanced AI assistant powered by OpenAI's latest **GPT-5.2** and **GPT-5.2-Codex** models. Designed to handle complex user queries, perform deep reasoning with extended thinking, manage information efficiently via the ReasoningBank memory system, and provide seamless interactions through a command-line interface.
 
-**Important:** As of September 21, 2024, the `o1-mini` model is only available to Tier 5 accounts on OpenAI. Ensure your OpenAI account meets this requirement to utilize all features of AGI-o1.
+### Key Capabilities
+
+- **GPT-5.2-Codex**: Most advanced agentic coding model (56.4% SWE-Bench Pro, 64.0% Terminal-Bench 2.0)
+- **400K Context Window**: Handle massive codebases and long documents
+- **128K Output Tokens**: Generate extensive code and detailed responses
+- **xhigh Reasoning Effort**: Maximum thinking for the hardest challenges
+- **Native Compaction**: Multi-hour reasoning without hitting context limits
+- **ReasoningBank**: Persistent memory system for learning from past interactions
+
+**Requirements:** ChatGPT Plus, Pro, Business, Edu, or Enterprise subscription for Codex access, or OpenAI API credits.
 
 ## Features
 
-- **Advanced Chat Interface**: Engage in dynamic conversations with the AI assistant.
-- **Function Calls**: Utilizes OpenAI's function calling to perform specialized tasks.
-- **Scratch Pad System**: Save, edit, view, list, and search notes categorized for easy access.
-- **Logging**: Comprehensive logging of interactions and system events.
-- **Modular Functions**: Includes research, information retrieval, weather updates, and more.
-- **Extensible**: Placeholder for future functionalities like image processing.
-- **Access Control**: `o1-mini` model access restricted to Tier 5 OpenAI accounts as of September 21, 2024.
+- **GPT-5.2-Codex Integration**: Advanced agentic coding with 400K context and 128K output
+- **Multi-level Reasoning**: Support for none, low, medium, high, and xhigh reasoning efforts
+- **ReasoningBank Memory**: Persistent memory system that learns from past interactions
+- **MaTTS (Memory-aware Test-Time Scaling)**: Multi-pass reasoning with memory retrieval
+- **Function Calling**: Utilizes OpenAI's tools API for specialized tasks
+- **Notes System**: Save, edit, view, list, and search notes in docs/paper.txt
+- **Insight Capsules**: Generate structured executive summaries
+- **Task Sessions**: Interactive sub-loops for tackling specific tasks
+- **Comprehensive Logging**: Detailed logs of all interactions and system events
 
 ## Architecture
 
@@ -45,9 +56,10 @@
 
 ### Prerequisites
 
-- **Python 3.8+**: Ensure you have Python installed. You can download it from [python.org](https://www.python.org/downloads/).
+- **Python 3.10+**: Ensure you have Python installed. You can download it from [python.org](https://www.python.org/downloads/).
 - **OpenAI API Key**: Obtain your API key from [OpenAI](https://platform.openai.com/account/api-keys).
-- **Tier 5 OpenAI Account**: Required to access the `o1-mini` model as of September 21, 2024.
+- **ChatGPT Subscription**: Plus, Pro, Business, Edu, or Enterprise for Codex access.
+- **Node.js 18+** (Optional): For Codex CLI and SDK integration.
 
 ### Steps
 
@@ -81,19 +93,39 @@
 
 1. **Environment Variables**
 
-   Create a `.env` file in the root directory of the project and add your OpenAI API key:
+   Copy the example configuration and add your OpenAI API key:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+   Key configuration options in `.env`:
 
    ```env
-   OPENAI_API_KEY=your_openai_api_key_here
+   # API Key (use environment-specific keys or legacy single key)
+   OPENAI_API_KEY_SANDBOX=sk-...
+
+   # Model Configuration
+   OPENAI_MODEL_ASSISTANT=gpt-5.2
+   OPENAI_MODEL_REASONING=gpt-5.2
+   OPENAI_MODEL_REASONING_EFFORT=high  # none, low, medium, high, xhigh
+   OPENAI_MODEL_CODE=gpt-5.2-codex
+   OPENAI_MODEL_CODE_MAX=gpt-5.1-codex-max
+
+   # Enable compaction for 400K context support
+   OPENAI_MODEL_COMPACTION=true
    ```
+
+   See `.env.example` and `CODEX_SETUP.md` for full configuration options.
 
 2. **Directory Setup**
 
    The application will automatically create the following directories if they do not exist:
 
    - `logs/`: Stores log files.
-   - `o1_responses/`: Stores responses from the `o1_research` function.
-   - `scratch_pad/`: Manages scratch pad files categorized appropriately.
+   - `o1_responses/`: Stores responses from deep reasoning and coding functions.
+   - `insight_capsules/`: Stores generated insight capsule JSON files.
+   - `docs/`: Contains paper.txt for notes and reasoning_bank.json for memory.
 
 ## Usage
 
