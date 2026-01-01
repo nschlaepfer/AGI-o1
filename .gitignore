@@ -1,6 +1,24 @@
+# Environment
 .env
 .venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# AGI-o1 runtime directories
 scratch_pad/
 o1_responses/
 logs/
+insight_capsules/
 OPENAI/
+
+# IDE
+.idea/
+.vscode/
+*.swp
