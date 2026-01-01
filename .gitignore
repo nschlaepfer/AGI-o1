@@ -22,3 +22,9 @@ OPENAI/
 .idea/
 .vscode/
 *.swp
+
+# External references
+external_refs/
+
+# Workspace state (local per-machine)
+workspaces/
