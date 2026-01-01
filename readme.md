@@ -1,4 +1,4 @@
-# AGI-o1
+# Amarillo
 
 Advanced AI assistant powered by GPT-5.2-Codex with 400K context, 128K output, and persistent memory.
 
@@ -7,13 +7,18 @@ Advanced AI assistant powered by GPT-5.2-Codex with 400K context, 128K output, a
 ## Quick Start
 
 ```bash
-git clone https://github.com/nschlaepfer/AGI-o1.git && cd AGI-o1
-pip install openai python-dotenv
+git clone https://github.com/nschlaepfer/amarillo.git && cd amarillo
+pip install -e .
 cp .env.example .env  # Add your OPENAI_API_KEY
-python agi_o1.py
+amarillo
 ```
 
-**Requirements:** Python 3.10+, OpenAI API key, ChatGPT Plus/Pro/Business/Edu/Enterprise subscription
+Or run directly:
+```bash
+python -m amarillo.main
+```
+
+**Requirements:** Python 3.10+, OpenAI API key
 
 ## Features
 
@@ -25,6 +30,18 @@ python agi_o1.py
 | Multi-level Reasoning | none/low/medium/high/xhigh effort levels |
 | Function Calling | OpenAI tools API integration |
 | Scratch Pad | Organized note storage system |
+
+## Installation
+
+### Development Install
+```bash
+pip install -e ".[dev]"
+```
+
+### Production Install
+```bash
+pip install .
+```
 
 ## Configuration
 
@@ -53,16 +70,16 @@ OPENAI_MODEL_COMPACTION=true
 
 ## Built-in Functions
 
-- **o1_research** - Deep STEM reasoning
-- **librarian** - Information retrieval
-- **get_current_weather** - Weather lookup
+- **deep_reasoning** - Deep STEM reasoning with configurable effort
+- **retrieve_knowledge** - Information retrieval
+- **coder** - Code generation with GPT-5.2-Codex
 - **Scratch pad operations** - save, edit, list, view, delete, search
 
-## Fluid Intelligence Modules (New)
+## Fluid Intelligence Modules
 
 Inspired by [Poetiq's ARC-AGI solver](https://poetiq.ai) and [Emdash](https://emdash.sh), these modules enable adaptive reasoning:
 
-### FluidReasoning (`fluid_reasoning.py`)
+### FluidReasoning
 Iterative refinement with feedback accumulation:
 - Generate hypothesis, evaluate, build feedback, iterate
 - Solution pool with probabilistic selection
@@ -70,14 +87,14 @@ Iterative refinement with feedback accumulation:
 - Early termination on success
 
 ```python
-from fluid_reasoning import FluidReasoner, ExpertConfig
+from amarillo.reasoning import FluidReasoner, ExpertConfig
 
 reasoner = FluidReasoner(client, evaluate_fn, config)
 result = await reasoner.solve(task)
 # Result includes: final_output, solutions, best_score, iteration_count
 ```
 
-### WorkspaceManager (`workspace_manager.py`)
+### WorkspaceManager
 Session state management with persistence:
 - Registry pattern (getOrCreate)
 - Automatic snapshot/restore
@@ -85,14 +102,14 @@ Session state management with persistence:
 - Workspace lifecycle (attach/detach/dispose)
 
 ```python
-from workspace_manager import create_workspace, get_or_create_workspace
+from amarillo.memory import WorkspaceManager, get_workspace_manager
 
-workspace = create_workspace("Implement sorting", workspace_id="task_001")
-workspace.add_message("user", "Please implement quicksort")
-workspace.mark_complete("success")
+manager = get_workspace_manager()
+task = manager.create_task("Implement sorting")
+task.add_reasoning_step("analysis", "Breaking down the problem...")
 ```
 
-### SoftScoring (`scoring.py`)
+### SoftScoring
 Partial credit evaluation system:
 - Multi-dimensional scoring criteria
 - Weighted aggregation
@@ -100,7 +117,7 @@ Partial credit evaluation system:
 - Pre-built scorers (syntax, keywords, execution)
 
 ```python
-from scoring import SoftScorer, code_syntax_scorer
+from amarillo.reasoning import SoftScorer, code_syntax_scorer
 
 scorer = SoftScorer(success_threshold=0.8)
 scorer.add_criterion("syntax", code_syntax_scorer, weight=1.0)
@@ -116,23 +133,46 @@ python examples/fluid_intelligence_demo.py
 ## Project Structure
 
 ```
-AGI-o1/
-├── AGI-o1.py            # Main script
-├── fluid_reasoning.py   # Iterative refinement module
-├── workspace_manager.py # Session state management
-├── scoring.py           # Soft scoring system
-├── reasoning_bank.py    # Persistent memory
-├── chat_history.py      # Conversation management
-├── tools.py             # Function schemas
-├── notes.py             # Notes management
-├── config.py            # Configuration
-├── examples/            # Demo scripts
-│   └── fluid_intelligence_demo.py
-├── logs/                # Chat logs
-├── o1_responses/        # Deep reasoning outputs
-├── workspaces/          # Persistent workspace state
-├── docs/                # paper.txt, reasoning_bank.json
-└── insight_capsules/    # Generated summaries
+amarillo/
+├── src/amarillo/           # Main package
+│   ├── __init__.py         # Package exports
+│   ├── main.py             # CLI entry point
+│   ├── core/               # Configuration & utilities
+│   │   ├── config.py       # Environment & settings
+│   │   ├── constants.py    # Magic numbers & defaults
+│   │   └── utils.py        # Helper functions
+│   ├── memory/             # State management
+│   │   ├── chat_history.py # Conversation tracking
+│   │   ├── reasoning_bank.py # Persistent memory
+│   │   ├── notes.py        # Notes system
+│   │   └── workspace_manager.py # Session state
+│   ├── reasoning/          # Intelligence modules
+│   │   ├── fluid_reasoning.py # Iterative refinement
+│   │   ├── ensemble_reasoning.py # Multi-expert voting
+│   │   └── scoring.py      # Soft scoring system
+│   └── tools/              # Tool definitions
+│       ├── tools.py        # Function schemas
+│       └── file_tools.py   # File operations
+├── tests/                  # Test suite
+├── examples/               # Demo scripts
+├── docs/                   # Documentation & data
+├── scripts/                # Utility scripts
+├── pyproject.toml          # Package configuration
+├── requirements.txt        # Dependencies
+└── .env.example            # Environment template
+```
+
+## Development
+
+### Running Tests
+```bash
+pytest
+```
+
+### Code Formatting
+```bash
+black src/ tests/
+ruff check src/ tests/
 ```
 
 ## License

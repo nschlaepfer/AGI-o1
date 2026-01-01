@@ -28,24 +28,25 @@ from uuid import uuid4
 
 from dotenv import load_dotenv
 
-from reasoning_bank import ReasoningBank
-from file_tools import (
+from amarillo.memory import ReasoningBank
+from amarillo.tools import (
     read_file, read_file_range, list_dir, glob_search, search_in_file,
     apply_patch, write_file, insert_at_line, delete_lines,
     get_file_tool_schemas, execute_file_tool, is_file_tool,
     get_token_budget, reset_token_budget
 )
-from workspace_manager import (
+from amarillo.memory import (
     WorkspaceManager, TaskContext, TaskStatus, ActivityState,
     get_workspace_manager, reset_workspace_manager
 )
-from ensemble_reasoning import (
+from amarillo.reasoning import (
     EnsembleReasoner, ReasoningResult, Solution, ReasoningPhase,
     run_fluid_reasoning, create_ensemble_reasoner
 )
 
 # Resolve repository root and load environment variables
-REPO_ROOT = Path(__file__).resolve().parent
+# Go up from main.py -> amarillo -> src -> project root
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 load_dotenv(REPO_ROOT / ".env")
 
 

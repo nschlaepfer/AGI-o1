@@ -8,7 +8,7 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from constants import NOTES_MARKER, NOTE_HEADING_PREFIX, DEFAULT_PAGE_SIZE, DEFAULT_PAGE
+from amarillo.core.constants import NOTES_MARKER, NOTE_HEADING_PREFIX, DEFAULT_PAGE_SIZE, DEFAULT_PAGE
 
 
 class NotesManager:

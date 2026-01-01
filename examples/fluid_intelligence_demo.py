@@ -17,24 +17,24 @@ import os
 import sys
 from pathlib import Path
 
-# Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add src directory to path
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from fluid_reasoning import (
+from amarillo.reasoning import (
     FluidReasoner,
     MultiExpertReasoner,
     ExpertConfig,
     create_simple_evaluator,
 )
-from workspace_manager import (
+from amarillo.memory import (
     WorkspaceManager,
     get_workspace_manager,
     TaskStatus,
 )
-from scoring import (
+from amarillo.reasoning.scoring import (
     SoftScorer,
     code_syntax_scorer,
     keyword_presence_scorer,

@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from constants import MAX_SLUG_LENGTH
+from .constants import MAX_SLUG_LENGTH
 
 
 def slugify(value: str, max_length: int = MAX_SLUG_LENGTH) -> str:

@@ -1,8 +1,12 @@
 import json
+import sys
 import types
 from pathlib import Path
 
-from reasoning_bank import ReasoningBank
+# Add src to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+from amarillo.memory import ReasoningBank
 
 
 class _FakeResponse:
