@@ -29,6 +29,20 @@ from uuid import uuid4
 from dotenv import load_dotenv
 
 from reasoning_bank import ReasoningBank
+from file_tools import (
+    read_file, read_file_range, list_dir, glob_search, search_in_file,
+    apply_patch, write_file, insert_at_line, delete_lines,
+    get_file_tool_schemas, execute_file_tool, is_file_tool,
+    get_token_budget, reset_token_budget
+)
+from workspace_manager import (
+    WorkspaceManager, TaskContext, TaskStatus, ActivityState,
+    get_workspace_manager, reset_workspace_manager
+)
+from ensemble_reasoning import (
+    EnsembleReasoner, ReasoningResult, Solution, ReasoningPhase,
+    run_fluid_reasoning, create_ensemble_reasoner
+)
 
 # Resolve repository root and load environment variables
 REPO_ROOT = Path(__file__).resolve().parent
@@ -234,35 +248,54 @@ class ChatHistory:
         self.system_message = {
             "role": "system",
             "content": (
-                "You are an advanced AI assistant functioning like a brain with specialized regions. "
-                "Your primary objective is to provide high-quality, thoughtful responses. Key instructions:"
-                "\n1. For ANY task requiring deep thinking, complex reasoning, or that a human would need to contemplate, "
-                "ALWAYS use the 'deep_reasoning' function. This includes but is not limited to:"
-                "\n   - Decision-making and problem-solving"
-                "\n   - Logical reasoning and analysis"
-                "\n   - Programming and technical tasks"
-                "\n   - Complex STEM questions"
-                "\n   - Creative thinking and ideation"
-                "\n   - Ethical considerations"
-                "\n   - Strategic planning"
-                "\n   - Any task that a human would need to contemplate for a long time to decide on an answer."
-                "\n   - Any task that requires you to think about what you are doing or thinking."
-                "\n   - Any code related task. "
-                "\n2. Analyze user queries thoroughly to determine if they require deep thinking."
-                "\n3. Use 'retrieve_knowledge' for factual information retrieval when deep analysis isn't needed."
-                "\n4. Use 'assist_user' for general interaction, writing assistance, and simple explanations."
-                "\n5. Manage your memory proactively using note functions:"
-                "\n   - 'save_note' to store important information"
-                "\n   - 'edit_note' to update existing notes"
-                "\n   - 'view_note' to recall stored information"
-                "\n   - 'search_notes' to find relevant data"
-                "\n   - 'list_notes' to review notes"
-                "\n6. Use 'fetch_weather' for weather-related queries."
-                "\n7. Always incorporate function results into your final response."
-                "\n8. Provide clear, concise, and accurate information."
-                "\n9. Continuously improve your knowledge by managing information in the notes. Acquire as much information as possible. Actively do this on your OWN."
-                "\nMake independent decisions, prioritizing the use of 'deep_reasoning' for any non-trivial task. "
-                "Your goal is to leverage your advanced capabilities to provide thoughtful, well-reasoned responses."
+                "You are AGI-o1, an advanced AI coding agent powered by GPT-5.2-Codex with specialized capabilities. "
+                "Your primary objective is to help users with complex coding tasks, file editing, and knowledge work.\n\n"
+
+                "## CORE PRINCIPLES\n"
+                "1. ALWAYS read files before editing them. Never guess at file contents.\n"
+                "2. Use chunked reading for large files to manage context window. Check token budget regularly.\n"
+                "3. Before calling a tool, explain WHY you are calling it (tool preambles improve accuracy).\n"
+                "4. Prefer 'apply_patch' for editing files (35% lower failure rate than other methods).\n\n"
+
+                "## FILE OPERATIONS (Context-Aware)\n"
+                "- 'read_file': Read files in chunks with offset/limit. Use for context management.\n"
+                "- 'read_file_range': Read specific line ranges (1-indexed).\n"
+                "- 'list_dir': List directory contents with filtering.\n"
+                "- 'glob_search': Find files using patterns like '**/*.py'.\n"
+                "- 'search_in_file': Search within files with context.\n"
+                "- 'apply_patch': PREFERRED edit method - search-and-replace with exact matching.\n"
+                "- 'write_file': Create new files only. Use apply_patch for edits.\n"
+                "- 'insert_at_line': Insert content at specific line numbers.\n"
+                "- 'delete_lines': Remove line ranges from files.\n"
+                "- 'get_context_budget': Check token usage to prevent context overflow.\n\n"
+
+                "## CONTEXT WINDOW MANAGEMENT\n"
+                "- Default chunk size: 100 lines (~400-600 tokens).\n"
+                "- For large files: Read in chunks, use offset to paginate.\n"
+                "- Check 'get_context_budget' before reading many files.\n"
+                "- If context is getting full, summarize and focus on relevant sections.\n\n"
+
+                "## REASONING & CODE GENERATION\n"
+                "- 'deep_reasoning': For complex analysis requiring extended thinking.\n"
+                "- 'coder': Generate code with GPT-5.2-Codex (400K context, 128K output).\n"
+                "- 'coder_xhigh': Maximum reasoning effort for hardest challenges.\n"
+                "- Use reasoning_effort='xhigh' for complex problems.\n\n"
+
+                "## MEMORY MANAGEMENT\n"
+                "- 'save_note': Store important information for future reference.\n"
+                "- 'edit_note': Update existing notes.\n"
+                "- 'view_note': Recall stored information.\n"
+                "- 'search_notes': Find relevant data across notes.\n"
+                "- 'list_notes': Review available notes.\n\n"
+
+                "## TOOL CALLING BEST PRACTICES (Per OpenAI Research)\n"
+                "1. Always explain your reasoning before calling a tool.\n"
+                "2. Read files before editing - never assume content.\n"
+                "3. Use 'apply_patch' with sufficient context for unique matches.\n"
+                "4. For coding tasks, call 'coder' with clear, specific requirements.\n"
+                "5. Check context budget periodically during long sessions.\n\n"
+
+                "Make independent decisions. Prioritize code quality and reliability over speed."
             )
         }
 
@@ -375,7 +408,11 @@ chat_history = ChatHistory()
 
 # Define available functions for the assistant
 def get_available_functions():
-    return [
+    # Start with file tools (priority for coding tasks per OpenAI recommendations)
+    file_tools = get_file_tool_schemas()
+
+    # Core agent functions
+    core_functions = [
         {
             "name": "deep_reasoning",
             "description": "Utilize advanced cognitive processing to perform deep reasoning and complex analysis, suitable for intricate decision-making, logical problem-solving, programming challenges, and addressing advanced STEM questions.",
@@ -587,7 +624,49 @@ def get_available_functions():
                 "required": ["query"]
             }
         },
+        {
+            "name": "fluid_reasoning",
+            "description": (
+                "Execute fluid intelligence reasoning with multi-expert ensemble. "
+                "Uses parallel experts with different seeds/temperatures, hierarchical prompt cascade, "
+                "soft-scoring with partial credit, and diversity-first voting. "
+                "Best for novel problems requiring creative problem-solving."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "The problem or task to solve with fluid reasoning"
+                    },
+                    "num_experts": {
+                        "type": "integer",
+                        "description": "Number of parallel experts (default: 3)",
+                        "default": 3
+                    },
+                    "hierarchical": {
+                        "type": "boolean",
+                        "description": "Use full hierarchical reasoning (analysis->hypothesis->implementation). Default: true",
+                        "default": True
+                    }
+                },
+                "required": ["task"]
+            }
+        },
+        {
+            "name": "workspace_status",
+            "description": "Get current workspace status including active tasks, token budget, and session summary.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        },
     ]
+
+    # Combine file tools (priority) with core functions
+    # File tools come first as per OpenAI recommendation for coding agents
+    return file_tools + core_functions
 
 
 def get_available_tools():
@@ -602,6 +681,10 @@ def _execute_tool(function_name: str, function_args: Dict[str, Any]) -> str:
     Dispatch a function/tool call and return a textual result.
     """
     try:
+        # Check if it's a file tool first (priority for coding tasks)
+        if is_file_tool(function_name):
+            return execute_file_tool(function_name, function_args)
+
         if function_name == "deep_reasoning":
             return deep_reasoning(function_args["query"])
         if function_name == "retrieve_knowledge":
@@ -631,6 +714,15 @@ def _execute_tool(function_name: str, function_args: Dict[str, Any]) -> str:
             )
         if function_name == "coder_xhigh":
             return coder(function_args["query"], use_max_model=False, reasoning_effort="xhigh")
+        if function_name == "fluid_reasoning":
+            return fluid_reasoning(
+                function_args["task"],
+                num_experts=function_args.get("num_experts", 3),
+                hierarchical=function_args.get("hierarchical", True)
+            )
+        if function_name == "workspace_status":
+            workspace = get_workspace_manager(REPO_ROOT / ".workspace")
+            return workspace.get_session_summary()
         logging.warning("Unknown function call requested: %s", function_name)
         return f"Unknown function: {function_name}"
     except KeyError as missing:
@@ -1471,6 +1563,157 @@ def coder(query, use_max_model: bool = False, reasoning_effort: Optional[str] = 
     return model_response
 
 
+def _llm_call_adapter(prompt: str, config: Dict[str, Any]) -> str:
+    """
+    Adapter to make OpenAI client compatible with ensemble_reasoning.
+
+    Used by EnsembleReasoner for parallel expert execution.
+    """
+    temperature = config.get("temperature", 0.7)
+    max_tokens = config.get("max_tokens", 4096)
+    reasoning_effort = config.get("reasoning_effort", MODEL_REASONING_EFFORT)
+
+    try:
+        # Try responses API first (for reasoning models)
+        request_args = {
+            "model": MODEL_REASONING,
+            "input": prompt,
+            "max_output_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        if reasoning_effort:
+            request_args["reasoning"] = {"effort": reasoning_effort}
+
+        response = client.responses.create(**request_args)
+        return response.output_text
+
+    except Exception as e:
+        logging.warning("Responses API failed, falling back to chat: %s", e)
+        # Fallback to chat completions
+        response = client.chat.completions.create(
+            model=MODEL_ASSISTANT,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        return response.choices[0].message.content or ""
+
+
+def fluid_reasoning(
+    task: str,
+    num_experts: int = 3,
+    max_iterations: int = 5,
+    hierarchical: bool = True
+) -> str:
+    """
+    Execute fluid intelligence reasoning with multi-expert ensemble.
+
+    Implements patterns from poetiq-arc-agi-solver:
+    - Parallel expert execution with different seeds/temperatures
+    - Hierarchical prompt cascade (analysis → hypothesis → implementation)
+    - Soft-scoring with partial credit
+    - Diversity-first voting for consensus
+
+    Args:
+        task: The problem or task to solve
+        num_experts: Number of parallel experts (default: 3)
+        max_iterations: Max refinement iterations per expert (default: 5)
+        hierarchical: Use full hierarchical reasoning (default: True)
+
+    Returns:
+        The best solution found by the ensemble
+    """
+    logging.info("Starting fluid reasoning with %d experts (hierarchical=%s)",
+                num_experts, hierarchical)
+
+    # Get workspace manager for state tracking
+    workspace = get_workspace_manager(REPO_ROOT / ".workspace")
+
+    # Create task in workspace
+    task_context = workspace.create_task(
+        title=f"Fluid Reasoning: {task[:50]}...",
+        description=task,
+        metadata={"type": "fluid_reasoning", "num_experts": num_experts}
+    )
+
+    workspace.set_task_activity(task_context.id, ActivityState.BUSY)
+
+    try:
+        # Run ensemble reasoning
+        result = run_fluid_reasoning(
+            problem=task,
+            llm_call=_llm_call_adapter,
+            hierarchical=hierarchical,
+            num_experts=num_experts
+        )
+
+        # Store solutions in workspace
+        for sol in result.solutions[:5]:  # Store top 5
+            workspace.add_solution(
+                task_context.id,
+                {"content": sol.content, "phase": sol.phase.value},
+                sol.score
+            )
+
+        # Update task status
+        if result.best_solution and result.best_solution.score >= 0.7:
+            workspace.update_task(task_context.id, status=TaskStatus.COMPLETED)
+        else:
+            workspace.update_task(task_context.id, status=TaskStatus.IN_PROGRESS)
+
+        # Format output
+        output_lines = [
+            f"## Fluid Reasoning Results",
+            f"",
+            f"**Task:** {task[:100]}...",
+            f"**Experts:** {num_experts}",
+            f"**Mode:** {'Hierarchical' if hierarchical else 'Parallel'}",
+            f"**Time:** {result.total_time:.2f}s",
+            f"**Solutions Found:** {len(result.solutions)}",
+            f"**Unique Solutions:** {result.metadata.get('unique_solutions', 0)}",
+            f"",
+        ]
+
+        if result.best_solution:
+            output_lines.append(f"### Best Solution (Score: {result.best_solution.score:.2f})")
+            output_lines.append("")
+            output_lines.append(result.best_solution.content)
+
+        if result.consensus_solution and result.consensus_solution != result.best_solution:
+            output_lines.append("")
+            output_lines.append(f"### Consensus Solution (Score: {result.consensus_solution.score:.2f})")
+            output_lines.append("")
+            output_lines.append(result.consensus_solution.content[:500] + "...")
+
+        # Log to file
+        log_filename = os.path.join(
+            o1_responses_dir,
+            f"fluid_reasoning_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        )
+        with open(log_filename, "w") as f:
+            f.write(f"Task: {task}\n")
+            f.write(f"Experts: {num_experts}\n")
+            f.write(f"Mode: {'Hierarchical' if hierarchical else 'Parallel'}\n")
+            f.write(f"Time: {result.total_time:.2f}s\n\n")
+            f.write("--- Solutions ---\n")
+            for i, sol in enumerate(result.solutions):
+                f.write(f"\n[{i+1}] Score: {sol.score:.2f}\n{sol.content}\n")
+
+        logging.info("Fluid reasoning completed: %d solutions, best score %.2f",
+                    len(result.solutions),
+                    result.best_solution.score if result.best_solution else 0)
+
+        return "\n".join(output_lines)
+
+    except Exception as e:
+        logging.exception("Fluid reasoning failed: %s", e)
+        workspace.update_task(task_context.id, status=TaskStatus.FAILED)
+        return f"Fluid reasoning failed: {str(e)}"
+
+    finally:
+        workspace.set_task_activity(task_context.id, ActivityState.IDLE)
+
+
 def generate_insight_capsule(topic: str, context: str, metadata: Optional[Dict[str, str]] = None):
     """
     Create a structured insight capsule using the reasoning model and persist it to disk.
@@ -1579,23 +1822,49 @@ def generate_insight_capsule(topic: str, context: str, metadata: Optional[Dict[s
 
 # Main interaction loop
 def main():
-    print("Welcome to the AGI-o1 System. Type 'exit', 'quit', or 'bye' to end the conversation.")
-    print("Available Commands:")
-    print("  /edit <index> <new_content>                - Edit a message at a specific index.")
-    print("  /remove <index>                            - Remove a message at a specific index.")
-    print("  /save_note <category> <filename> <content> - Save a note to docs/paper.txt.")
-    print("  /edit_note <category> <filename> <new_content> - Edit an existing note.")
-    print("  /list_notes [category] [page]              - List notes, optionally within a category and paginated.")
-    print("  /view_note <category> <filename>           - View the content of a note.")
-    print("  /delete_note <category> <filename>         - Delete a note.")
-    print("  /search_notes <query>                      - Search for a query string within all notes.")
-    print("  /rb_stats                                  - Show ReasoningBank metadata.")
-    print("  /rb_query <query>                          - Retrieve relevant ReasoningBank items.")
-    print("  /rb_recent                                 - Show recent ReasoningBank items.")
-    print("  /mtts <passes> :: <task>                   - Run MaTTS multi-pass reasoning (default passes=3).")
-    print("  /mtts_seq <passes> :: <task>               - Run sequential MaTTS self-refinement.")
-    print("  /session <task>                            - Start an interactive task sub-loop.")
-    print("  /insight <topic> :: <context>              - Generate an Insight Capsule (context optional).")
+    # Reset token budget for new session
+    reset_token_budget(limit=100000)  # Conservative limit for context tracking
+
+    print("=" * 80)
+    print("  AGI-o1 System | Powered by GPT-5.2-Codex")
+    print("  Advanced AI Coding Agent with Context Window Management")
+    print("=" * 80)
+    print("\nType 'exit', 'quit', or 'bye' to end the conversation.\n")
+
+    print("FILE OPERATIONS (New!):")
+    print("  /read <path> [offset] [limit]              - Read file with chunked access")
+    print("  /ls [path] [pattern]                       - List directory contents")
+    print("  /find <glob_pattern>                       - Search for files (e.g., **/*.py)")
+    print("  /search <path> <pattern>                   - Search within a file")
+    print("  /context                                   - Show token budget status")
+    print("")
+    print("NOTES & MEMORY:")
+    print("  /save_note <category> <filename> <content> - Save a note to docs/paper.txt")
+    print("  /edit_note <category> <filename> <content> - Edit an existing note")
+    print("  /list_notes [category] [page]              - List notes, optionally paginated")
+    print("  /view_note <category> <filename>           - View the content of a note")
+    print("  /delete_note <category> <filename>         - Delete a note")
+    print("  /search_notes <query>                      - Search within all notes")
+    print("")
+    print("FLUID INTELLIGENCE (New!):")
+    print("  /fluid <task>                              - Multi-expert ensemble reasoning")
+    print("  /fluid_fast <task>                         - Fast parallel reasoning (no hierarchy)")
+    print("  /workspace                                 - Show workspace/session status")
+    print("  /tasks                                     - List all tasks in workspace")
+    print("  /checkpoint [name]                         - Save workspace checkpoint")
+    print("")
+    print("REASONING & SESSIONS:")
+    print("  /rb_stats                                  - Show ReasoningBank metadata")
+    print("  /rb_query <query>                          - Retrieve relevant ReasoningBank items")
+    print("  /rb_recent                                 - Show recent ReasoningBank items")
+    print("  /mtts <passes> :: <task>                   - Run MaTTS multi-pass reasoning")
+    print("  /mtts_seq <passes> :: <task>               - Run sequential MaTTS self-refinement")
+    print("  /session <task>                            - Start an interactive task sub-loop")
+    print("  /insight <topic> :: <context>              - Generate an Insight Capsule")
+    print("")
+    print("CHAT MANAGEMENT:")
+    print("  /edit <index> <new_content>                - Edit a message at a specific index")
+    print("  /remove <index>                            - Remove a message at a specific index")
     print("-" * 80)
 
     # Read all stored notes
@@ -1618,6 +1887,118 @@ Please summarize this information and suggest a topic or question we could discu
             logging.info("User ended the conversation")
             print("Goodbye!")
             break
+
+        # FILE OPERATION COMMANDS (New!)
+        elif user_input.startswith("/read "):
+            # Parse read command: /read <path> [offset] [limit]
+            parts = user_input.split()
+            if len(parts) >= 2:
+                file_path = parts[1]
+                offset = int(parts[2]) if len(parts) > 2 else 0
+                limit = int(parts[3]) if len(parts) > 3 else None
+                result = read_file(file_path, offset=offset, limit=limit)
+                print(result)
+            else:
+                print("Usage: /read <path> [offset] [limit]")
+            continue
+
+        elif user_input.startswith("/ls"):
+            # Parse ls command: /ls [path] [pattern]
+            parts = user_input.split()
+            path = parts[1] if len(parts) > 1 else "."
+            pattern = parts[2] if len(parts) > 2 else None
+            result = list_dir(path, pattern=pattern)
+            print(result)
+            continue
+
+        elif user_input.startswith("/find "):
+            # Parse find command: /find <glob_pattern>
+            pattern = user_input[6:].strip()
+            if pattern:
+                result = glob_search(pattern)
+                print(result)
+            else:
+                print("Usage: /find <glob_pattern> (e.g., **/*.py)")
+            continue
+
+        elif user_input.startswith("/search "):
+            # Parse search command: /search <path> <pattern>
+            parts = user_input.split(maxsplit=2)
+            if len(parts) == 3:
+                file_path = parts[1]
+                pattern = parts[2]
+                result = search_in_file(file_path, pattern)
+                print(result)
+            else:
+                print("Usage: /search <path> <pattern>")
+            continue
+
+        elif user_input == "/context":
+            # Show token budget status
+            budget = get_token_budget()
+            print(budget.summary())
+            continue
+
+        # FLUID INTELLIGENCE COMMANDS (New!)
+        elif user_input.startswith("/fluid "):
+            # Fluid reasoning with multi-expert ensemble
+            task = user_input[7:].strip()
+            if task:
+                print("Starting fluid reasoning with 3 experts (hierarchical mode)...")
+                result = fluid_reasoning(task, num_experts=3, hierarchical=True)
+                print(result)
+            else:
+                print("Usage: /fluid <task>")
+            continue
+
+        elif user_input.startswith("/fluid_fast "):
+            # Fast parallel reasoning without hierarchy
+            task = user_input[12:].strip()
+            if task:
+                print("Starting fast fluid reasoning with 3 experts (parallel mode)...")
+                result = fluid_reasoning(task, num_experts=3, hierarchical=False)
+                print(result)
+            else:
+                print("Usage: /fluid_fast <task>")
+            continue
+
+        elif user_input == "/workspace":
+            # Show workspace status
+            workspace = get_workspace_manager(REPO_ROOT / ".workspace")
+            print(workspace.get_session_summary())
+            continue
+
+        elif user_input == "/tasks":
+            # List all tasks in workspace
+            workspace = get_workspace_manager(REPO_ROOT / ".workspace")
+            tasks = workspace.list_tasks()
+            if not tasks:
+                print("No tasks in workspace.")
+            else:
+                print(f"Tasks in workspace ({len(tasks)}):")
+                for task in tasks:
+                    status_icon = {
+                        TaskStatus.PENDING: "⏳",
+                        TaskStatus.IN_PROGRESS: "🔄",
+                        TaskStatus.COMPLETED: "✅",
+                        TaskStatus.FAILED: "❌",
+                        TaskStatus.PAUSED: "⏸️",
+                        TaskStatus.WAITING: "⏸️",
+                        TaskStatus.CANCELLED: "🚫"
+                    }.get(task.status, "❓")
+                    active = " [ACTIVE]" if task.id == workspace._active_task_id else ""
+                    print(f"  {status_icon} {task.title} (score: {task.score:.2f}){active}")
+            continue
+
+        elif user_input.startswith("/checkpoint"):
+            # Save workspace checkpoint
+            parts = user_input.split(maxsplit=1)
+            name = parts[1] if len(parts) > 1 else None
+            workspace = get_workspace_manager(REPO_ROOT / ".workspace")
+            checkpoint_path = workspace.save_checkpoint(name)
+            print(f"Checkpoint saved: {checkpoint_path}")
+            continue
+
         elif user_input.startswith("/edit "):
             # Parse edit command: /edit <index> <new_content>
             parts = user_input.split(maxsplit=2)
