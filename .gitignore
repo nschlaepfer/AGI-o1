@@ -22,3 +22,6 @@ OPENAI/
 .idea/
 .vscode/
 *.swp
+
+# Vendor (cloned repos for study)
+vendor/
