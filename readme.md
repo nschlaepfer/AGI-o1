@@ -58,16 +58,81 @@ OPENAI_MODEL_COMPACTION=true
 - **get_current_weather** - Weather lookup
 - **Scratch pad operations** - save, edit, list, view, delete, search
 
+## Fluid Intelligence Modules (New)
+
+Inspired by [Poetiq's ARC-AGI solver](https://poetiq.ai) and [Emdash](https://emdash.sh), these modules enable adaptive reasoning:
+
+### FluidReasoning (`fluid_reasoning.py`)
+Iterative refinement with feedback accumulation:
+- Generate hypothesis, evaluate, build feedback, iterate
+- Solution pool with probabilistic selection
+- Multi-expert voting for ensemble reasoning
+- Early termination on success
+
+```python
+from fluid_reasoning import FluidReasoner, ExpertConfig
+
+reasoner = FluidReasoner(client, evaluate_fn, config)
+result = await reasoner.solve(task)
+# Result includes: final_output, solutions, best_score, iteration_count
+```
+
+### WorkspaceManager (`workspace_manager.py`)
+Session state management with persistence:
+- Registry pattern (getOrCreate)
+- Automatic snapshot/restore
+- Activity tracking and event listeners
+- Workspace lifecycle (attach/detach/dispose)
+
+```python
+from workspace_manager import create_workspace, get_or_create_workspace
+
+workspace = create_workspace("Implement sorting", workspace_id="task_001")
+workspace.add_message("user", "Please implement quicksort")
+workspace.mark_complete("success")
+```
+
+### SoftScoring (`scoring.py`)
+Partial credit evaluation system:
+- Multi-dimensional scoring criteria
+- Weighted aggregation
+- Actionable feedback generation
+- Pre-built scorers (syntax, keywords, execution)
+
+```python
+from scoring import SoftScorer, code_syntax_scorer
+
+scorer = SoftScorer(success_threshold=0.8)
+scorer.add_criterion("syntax", code_syntax_scorer, weight=1.0)
+result = scorer.score(solution, context)
+# Result includes: score, success, dimension_scores, feedback
+```
+
+### Demo
+```bash
+python examples/fluid_intelligence_demo.py
+```
+
 ## Project Structure
 
 ```
 AGI-o1/
-├── agi_o1.py          # Main script
-├── logs/              # Chat logs
-├── o1_responses/      # Deep reasoning outputs
-├── scratch_pad/       # User notes
-├── docs/              # paper.txt, reasoning_bank.json
-└── insight_capsules/  # Generated summaries
+├── AGI-o1.py            # Main script
+├── fluid_reasoning.py   # Iterative refinement module
+├── workspace_manager.py # Session state management
+├── scoring.py           # Soft scoring system
+├── reasoning_bank.py    # Persistent memory
+├── chat_history.py      # Conversation management
+├── tools.py             # Function schemas
+├── notes.py             # Notes management
+├── config.py            # Configuration
+├── examples/            # Demo scripts
+│   └── fluid_intelligence_demo.py
+├── logs/                # Chat logs
+├── o1_responses/        # Deep reasoning outputs
+├── workspaces/          # Persistent workspace state
+├── docs/                # paper.txt, reasoning_bank.json
+└── insight_capsules/    # Generated summaries
 ```
 
 ## License

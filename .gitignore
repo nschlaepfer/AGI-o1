@@ -23,5 +23,11 @@ OPENAI/
 .vscode/
 *.swp
 
+# External references
+external_refs/
+
+# Workspace state (local per-machine)
+workspaces/
+
 # Vendor (cloned repos for study)
 vendor/
