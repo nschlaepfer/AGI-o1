@@ -12,7 +12,8 @@ from dotenv import load_dotenv
 
 
 # Resolve repository root and load environment variables
-REPO_ROOT = Path(__file__).resolve().parent
+# Go up 3 levels: core -> amarillo -> src -> project root
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 load_dotenv(REPO_ROOT / ".env")
 
 

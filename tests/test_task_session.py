@@ -1,16 +1,22 @@
 import builtins
 import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
 
+# Add src to path
+project_root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(project_root / "src"))
+
 
 @pytest.fixture
 def agi_module(monkeypatch):
-    project_root = Path(__file__).resolve().parents[1]
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     monkeypatch.setenv("REASONING_BANK_ENABLED", "false")
-    spec = importlib.util.spec_from_file_location("agi_o1", project_root / "AGI-o1.py")
+    spec = importlib.util.spec_from_file_location(
+        "main", project_root / "src" / "amarillo" / "main.py"
+    )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

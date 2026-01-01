@@ -8,7 +8,7 @@ import logging
 from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
-from constants import REASONING_EFFORTS
+from amarillo.core.constants import REASONING_EFFORTS
 
 
 # Type alias for tool function

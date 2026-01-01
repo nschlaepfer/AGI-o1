@@ -8,8 +8,8 @@ import logging
 from collections import deque
 from typing import Any, Dict, List, Optional
 
-from constants import DEFAULT_MAX_MESSAGES, DEFAULT_DIALOGUE_TURNS
-from utils import format_message_for_display, render_message_content
+from amarillo.core.constants import DEFAULT_MAX_MESSAGES, DEFAULT_DIALOGUE_TURNS
+from amarillo.core.utils import format_message_for_display, render_message_content
 
 
 # System prompt for the AI assistant

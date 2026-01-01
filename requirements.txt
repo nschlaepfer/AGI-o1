@@ -1,9 +1,12 @@
-# AGI-o1 Dependencies
-# OpenAI SDK with GPT-5.2 and Codex support
-openai>=1.60.0
+# Amarillo Dependencies
 
-# Environment configuration
-python-dotenv>=1.0.0
+# Core dependencies
+openai>=1.60.0              # OpenAI SDK with GPT-5.2 and Codex support
+python-dotenv>=1.0.0        # Environment configuration
+numpy>=1.24.0               # Used for soft scoring and array operations
+
+# Development dependencies (optional)
+pytest>=7.0.0               # Testing framework
 
 # Optional: OpenAI Agents SDK for MCP server integration
 # pip install openai-agents
