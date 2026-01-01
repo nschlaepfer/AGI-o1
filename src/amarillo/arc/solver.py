@@ -28,15 +28,19 @@ from .refinement import ARCRefinementLoop, RefinementResult
 from .dsl import ARCDSL, create_standard_dsl, BeamSearch, GeneticSearch, HybridSearch
 from .synthesis import generate_augmentations
 from .ttt import TestTimeTrainer, TTTConfig
+from .codex_solver import GPT52CodexSolver, CodexConfig, CodexResult
+from .icl_adapter import InContextAdapter, ICLConfig
 
 logger = logging.getLogger(__name__)
 
 
 class SolvingStrategy(Enum):
     """Available solving strategies."""
-    REFINEMENT = auto()  # LLM-based iterative refinement
+    CODEX = auto()  # GPT-5.2-Codex optimized refinement (PRIMARY)
+    REFINEMENT = auto()  # LLM-based iterative refinement (legacy)
     DSL_SEARCH = auto()  # Program synthesis with DSL
-    TTT = auto()  # Test-time training
+    ICL = auto()  # In-context learning (replaces TTT)
+    TTT = auto()  # Test-time training (legacy, for local models)
     DIRECT = auto()  # Direct LLM prediction
     ENSEMBLE = auto()  # Combine multiple strategies
 
@@ -44,11 +48,12 @@ class SolvingStrategy(Enum):
 @dataclass
 class SolverConfig:
     """Configuration for the ARC solver."""
-    # Strategy selection
+    # Strategy selection - CODEX is now primary
     strategies: List[SolvingStrategy] = field(default_factory=lambda: [
-        SolvingStrategy.REFINEMENT,
-        SolvingStrategy.DSL_SEARCH,
+        SolvingStrategy.CODEX,  # Primary: GPT-5.2-Codex
+        SolvingStrategy.DSL_SEARCH,  # Fallback: Fast DSL search
     ])
+    use_codex: bool = True  # Use GPT-5.2-Codex as primary solver
     ensemble_strategies: bool = True
 
     # Time management
@@ -129,8 +134,23 @@ class ARCSolver:
         self.evaluator = ARCEvaluator(allow_partial_credit=True)
         self.dsl = create_standard_dsl()
 
+        # GPT-5.2-Codex solver (primary)
+        if self.config.use_codex:
+            self.codex_solver = GPT52CodexSolver(
+                client=self.client,
+                config=CodexConfig(
+                    model="gpt-5.2-codex",
+                    reasoning_model="gpt-5.2",
+                    reasoning_effort="high",
+                    max_iterations=15,
+                ),
+            )
+            self.icl_adapter = InContextAdapter()
+
         # Strategy handlers
         self._strategy_handlers: Dict[SolvingStrategy, Callable] = {
+            SolvingStrategy.CODEX: self._solve_codex,  # PRIMARY
+            SolvingStrategy.ICL: self._solve_icl,
             SolvingStrategy.REFINEMENT: self._solve_refinement,
             SolvingStrategy.DSL_SEARCH: self._solve_dsl,
             SolvingStrategy.TTT: self._solve_ttt,
@@ -295,12 +315,149 @@ class ARCSolver:
 
         return await handler(task, time_budget)
 
+    async def _solve_codex(
+        self,
+        task: ARCTask,
+        time_budget: float,
+    ) -> SolveResult:
+        """
+        Solve using GPT-5.2-Codex (PRIMARY STRATEGY).
+
+        Leverages:
+        - 400K token context for full history
+        - Native context compaction
+        - Agentic coding capabilities
+        """
+        if not hasattr(self, 'codex_solver'):
+            # Fallback to refinement if Codex not initialized
+            return await self._solve_refinement(task, time_budget)
+
+        # Build ICL context from previously solved tasks
+        icl_context = self.icl_adapter.build_context(task)
+
+        # Update Codex solver with ICL context
+        self.codex_solver._session_context = []
+        if icl_context:
+            self.codex_solver._session_context.append({
+                "role": "assistant",
+                "content": f"[Previous knowledge]\n{icl_context[:50000]}"  # Truncate if needed
+            })
+
+        # Solve with Codex
+        result = await self.codex_solver.solve(task)
+
+        # If successful, add to ICL library for future tasks
+        if result.success and result.final_code:
+            self.icl_adapter.add_solved_example(
+                task=task,
+                solution_code=result.final_code,
+                reasoning_trace=None,
+            )
+
+        return SolveResult(
+            task_id=task.id,
+            predictions=result.predictions,
+            score=result.score,
+            success=result.success,
+            strategy_used=SolvingStrategy.CODEX,
+            elapsed_seconds=result.elapsed_seconds,
+            attempts=len(result.attempts),
+            metadata={
+                "codex_result": True,
+                "total_tokens": result.total_tokens,
+                "total_cost": result.total_cost,
+                "final_code": result.final_code,
+            }
+        )
+
+    async def _solve_icl(
+        self,
+        task: ARCTask,
+        time_budget: float,
+    ) -> SolveResult:
+        """
+        Solve using pure in-context learning.
+
+        Uses the ICL adapter to build context from solved examples
+        and similar tasks, then makes a single inference call.
+        """
+        start_time = time.time()
+
+        # Build comprehensive ICL context
+        icl_context = self.icl_adapter.build_context(task)
+
+        # Build prompt with ICL context
+        prompt = f"""{icl_context}
+
+## Current Task to Solve
+
+{task.format_for_prompt()}
+
+Based on the patterns in the similar tasks above, write Python code to solve this task:
+
+```python
+import numpy as np
+
+def transform(grid: np.ndarray) -> np.ndarray:
+    # Your implementation
+    pass
+```
+"""
+
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-5.2-codex",
+                messages=[
+                    {"role": "system", "content": "You are an expert ARC-AGI solver."},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.3,
+                max_tokens=4096,
+            )
+
+            content = response.choices[0].message.content or ""
+
+            # Extract and evaluate code
+            from .evaluator import CodeExecutionEvaluator
+            code_eval = CodeExecutionEvaluator()
+
+            import re
+            match = re.search(r"```python\s*(.*?)```", content, re.DOTALL)
+            if match:
+                code = match.group(1)
+                eval_result = code_eval.evaluate_code(code, task)
+
+                return SolveResult(
+                    task_id=task.id,
+                    predictions=eval_result.predictions,
+                    score=eval_result.score,
+                    success=eval_result.score >= 1.0,
+                    strategy_used=SolvingStrategy.ICL,
+                    elapsed_seconds=time.time() - start_time,
+                    attempts=1,
+                    metadata={"icl_context_used": True}
+                )
+
+        except Exception as e:
+            logger.error(f"ICL solving failed: {e}")
+
+        # Fallback
+        return SolveResult(
+            task_id=task.id,
+            predictions=[Grid.empty(1, 1) for _ in task.test],
+            score=0.0,
+            success=False,
+            strategy_used=SolvingStrategy.ICL,
+            elapsed_seconds=time.time() - start_time,
+            attempts=1,
+        )
+
     async def _solve_refinement(
         self,
         task: ARCTask,
         time_budget: float,
     ) -> SolveResult:
-        """Solve using LLM refinement loop."""
+        """Solve using LLM refinement loop (legacy, use CODEX instead)."""
         refinement_loop = ARCRefinementLoop(
             client=self.client,
             model=self.config.refinement_model,
