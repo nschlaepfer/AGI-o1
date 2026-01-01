@@ -1,14 +1,32 @@
+"""
+AGI-o1: Advanced AI Assistant with GPT-5.2 and Codex Integration.
+
+A modular AI assistant featuring:
+- GPT-5.2-Codex for advanced agentic coding (400K context, 128K output)
+- Multi-level reasoning with xhigh effort for complex challenges
+- ReasoningBank memory system for learning from past interactions
+- Memory-aware Test-Time Scaling (MaTTS) for multi-pass reasoning
+- Notes system for persistent knowledge management
+- Insight Capsule generation for executive summaries
+
+Usage:
+    python AGI-o1.py
+
+Configuration:
+    See .env.example and CODEX_SETUP.md for configuration options.
+"""
 from openai import OpenAI
-import os
 import json
-from dotenv import load_dotenv
 import logging
-from datetime import datetime
-from collections import deque
-from typing import Dict, Optional, List, Any, Tuple
-from pathlib import Path
+import os
 import re
+from collections import deque
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
+
+from dotenv import load_dotenv
 
 from reasoning_bank import ReasoningBank
 
@@ -47,13 +65,20 @@ if not OPENAI_API_KEY:
 # Initialize OpenAI client
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-MODEL_ASSISTANT = os.getenv("OPENAI_MODEL_ASSISTANT", os.getenv("OPENAI_MODEL_REASONING", "gpt-5"))
-MODEL_REASONING = os.getenv("OPENAI_MODEL_REASONING", "gpt-5")
+# GPT-5.2 and Codex model configuration
+# Available models: gpt-5.2, gpt-5.2-codex (most advanced agentic coding)
+# GPT-5.1-codex-max (long-horizon agentic tasks), gpt-5.1-codex-mini (cost-effective)
+MODEL_ASSISTANT = os.getenv("OPENAI_MODEL_ASSISTANT", os.getenv("OPENAI_MODEL_REASONING", "gpt-5.2"))
+MODEL_REASONING = os.getenv("OPENAI_MODEL_REASONING", "gpt-5.2")
+# Reasoning effort levels: none, low, medium, high, xhigh (GPT-5.2 supports xhigh for hardest tasks)
 MODEL_REASONING_EFFORT = os.getenv("OPENAI_MODEL_REASONING_EFFORT", "high")
-MODEL_CODE = os.getenv("OPENAI_MODEL_CODE", "gpt-5-codex")
+MODEL_CODE = os.getenv("OPENAI_MODEL_CODE", "gpt-5.2-codex")
+MODEL_CODE_MAX = os.getenv("OPENAI_MODEL_CODE_MAX", "gpt-5.1-codex-max")
 MODEL_REALTIME = os.getenv("OPENAI_MODEL_REALTIME", "gpt-realtime")
 MODEL_REALTIME_MINI = os.getenv("OPENAI_MODEL_REALTIME_MINI", "gpt-realtime-mini")
-MODEL_EMBEDDING = os.getenv("OPENAI_MODEL_EMBEDDING", "text-embedding-3-small")
+MODEL_EMBEDDING = os.getenv("OPENAI_MODEL_EMBEDDING", "text-embedding-3-large")
+# Enable auto-compaction for long context (GPT-5.2 supports 400K context window)
+MODEL_COMPACTION = _bool_from_env("OPENAI_MODEL_COMPACTION", True)
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 LOG_SAMPLE_PROMPTS = _bool_from_env("LOG_SAMPLE_PROMPTS", True)
@@ -85,14 +110,16 @@ logging.basicConfig(
 )
 logging.info(
     "OpenAI environment '%s' initialized with assistant=%s, reasoning=%s (effort=%s), "
-    "code=%s, realtime=%s, realtime_mini=%s",
+    "code=%s, code_max=%s, realtime=%s, realtime_mini=%s, compaction=%s",
     OPENAI_ENVIRONMENT,
     MODEL_ASSISTANT,
     MODEL_REASONING,
     MODEL_REASONING_EFFORT,
     MODEL_CODE,
+    MODEL_CODE_MAX,
     MODEL_REALTIME,
     MODEL_REALTIME_MINI,
+    MODEL_COMPACTION,
 )
 
 reasoning_bank: Optional[ReasoningBank] = None
@@ -336,13 +363,13 @@ class ChatHistory:
     def edit_message(self, index, new_content):
         if 0 <= index < len(self.messages):
             self.messages[index]["content"] = new_content
-            logging.info(f"Edited message at index {index}.")
+            logging.info("Edited message at index %d.", index)
 
     def remove_message(self, index):
         if 0 <= index < len(self.messages):
             removed = self.messages[index]
             del self.messages[index]
-            logging.info(f"Removed message at index {index}: {removed}")
+            logging.info("Removed message at index %d: %s", index, removed)
 
 chat_history = ChatHistory()
 
@@ -524,13 +551,37 @@ def get_available_functions():
         },
         {
             "name": "coder",
-            "description": "Generate and run Python code using the configured coding model (e.g., GPT-5-Codex). Only outputs the running code and its output.",
+            "description": "Generate and run Python code using GPT-5.2-Codex (most advanced agentic coding model). Supports 400K context, 128K output, native compaction for long-running tasks.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
                         "description": "The coding task or question"
+                    },
+                    "use_max_model": {
+                        "type": "boolean",
+                        "description": "Use GPT-5.1-Codex-Max for long-horizon agentic tasks (default: false)",
+                        "default": False
+                    },
+                    "reasoning_effort": {
+                        "type": "string",
+                        "enum": ["none", "low", "medium", "high", "xhigh"],
+                        "description": "Reasoning effort level. Use 'xhigh' for the hardest coding challenges (default: high)"
+                    }
+                },
+                "required": ["query"]
+            }
+        },
+        {
+            "name": "coder_xhigh",
+            "description": "Generate code using GPT-5.2-Codex with xhigh reasoning effort for the most complex engineering challenges requiring extended thinking.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The complex coding task requiring maximum reasoning"
                     }
                 },
                 "required": ["query"]
@@ -573,7 +624,13 @@ def _execute_tool(function_name: str, function_args: Dict[str, Any]) -> str:
         if function_name == "assist_user":
             return assist_user(function_args["query"])
         if function_name == "coder":
-            return coder(function_args["query"])
+            return coder(
+                function_args["query"],
+                use_max_model=function_args.get("use_max_model", False),
+                reasoning_effort=function_args.get("reasoning_effort"),
+            )
+        if function_name == "coder_xhigh":
+            return coder(function_args["query"], use_max_model=False, reasoning_effort="xhigh")
         logging.warning("Unknown function call requested: %s", function_name)
         return f"Unknown function: {function_name}"
     except KeyError as missing:
@@ -587,7 +644,7 @@ def _execute_tool(function_name: str, function_args: Dict[str, Any]) -> str:
 def gpt4o_chat(user_input, is_initial_response=False, chat: ChatHistory = None):
     if chat is None:
         chat = chat_history
-    logging.info(f"User input: {user_input}")
+    logging.info("User input: %s", user_input)
     chat.add_message("user", user_input)
 
     retrieved_memory = []
@@ -786,22 +843,38 @@ def gpt4o_chat(user_input, is_initial_response=False, chat: ChatHistory = None):
     # If we've reached the maximum number of iterations, return the last response
     return "I apologize, but I'm having trouble processing your request. Could you please rephrase or provide more information?"
 
-def deep_reasoning(query):
+def deep_reasoning(query, reasoning_effort: Optional[str] = None):
+    """
+    Utilize GPT-5.2 advanced cognitive processing for deep reasoning.
+
+    Supports reasoning effort levels:
+    - none: No extended thinking
+    - low: Quick reasoning
+    - medium: Balanced (recommended for daily use)
+    - high: Extended thinking for complex tasks
+    - xhigh: Maximum reasoning for the hardest challenges (GPT-5.2 exclusive)
+
+    Args:
+        query: The complex question or problem to analyze
+        reasoning_effort: Override the default reasoning effort level
+    """
     prompt = f"Research query: {query}"
     _log_prompt("deep_reasoning", prompt)
     response_text = None
+    effort = reasoning_effort or MODEL_REASONING_EFFORT
 
     try:
-        reasoning_kwargs = (
-            {"effort": MODEL_REASONING_EFFORT}
-            if MODEL_REASONING_EFFORT
-            else None
-        )
-        response = client.responses.create(
-            model=MODEL_REASONING,
-            input=prompt,
-            **({"reasoning": reasoning_kwargs} if reasoning_kwargs else {}),
-        )
+        request_args = {
+            "model": MODEL_REASONING,
+            "input": prompt,
+        }
+        if effort:
+            request_args["reasoning"] = {"effort": effort}
+        # Enable compaction for long context handling with GPT-5.2
+        if MODEL_COMPACTION:
+            request_args["store"] = True
+
+        response = client.responses.create(**request_args)
         response_text = response.output_text
     except Exception as exc:
         logging.warning(
@@ -814,7 +887,7 @@ def deep_reasoning(query):
         )
         response_text = response.choices[0].message.content
 
-    logging.info("Reasoning flow completed")
+    logging.info("Reasoning flow completed with %s (effort=%s)", MODEL_REASONING, effort)
     _log_response("deep_reasoning", response_text or "")
 
     # Log response to a separate file for auditing
@@ -822,7 +895,7 @@ def deep_reasoning(query):
         o1_responses_dir, f"reasoning_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
     )
     with open(o1_log_filename, "w") as f:
-        f.write(f"Query: {query}\n\nResponse:\n{response_text}")
+        f.write(f"Query: {query}\nModel: {MODEL_REASONING}\nEffort: {effort}\n\nResponse:\n{response_text}")
 
     return response_text
 
@@ -873,7 +946,7 @@ def retrieve_knowledge(query):
         return "No response from librarian."
 
     except Exception as e:
-        logging.error(f"Error in librarian function: {str(e)}")
+        logging.error("Error in librarian function: %s", e)
         return f"An error occurred while retrieving information: {str(e)}"
 
 def save_note(category, filename, content):
@@ -989,10 +1062,10 @@ def fetch_weather(location, unit='celsius'):
     try:
         # Placeholder response
         weather_info = f"The current weather in {location} is sunny with a temperature of 25 degrees {unit}."
-        logging.info(f"Retrieved weather information for {location}: {weather_info}")
+        logging.info("Retrieved weather information for %s: %s", location, weather_info)
         return weather_info
     except Exception as e:
-        logging.error(f"Error retrieving weather information: {str(e)}")
+        logging.error("Error retrieving weather information: %s", e)
         return f"An error occurred while retrieving weather information: {str(e)}"
 
 def assist_user(query):
@@ -1324,9 +1397,19 @@ def run_task_session(task: str, max_turns: int = 10):
         print(json.dumps(evaluation, indent=2))
     print(f"--- Task session '{task}' ended ---\n")
 
-def coder(query):
+def coder(query, use_max_model: bool = False, reasoning_effort: Optional[str] = None):
     """
     Function to generate and run Python code using the configured coding model.
+
+    GPT-5.2-Codex is the most advanced agentic coding model with:
+    - 400K context window, 128K max output tokens
+    - Native compaction for long-running tasks
+    - Strong performance on refactors, migrations, and security tasks
+
+    Args:
+        query: The coding task or question
+        use_max_model: If True, uses gpt-5.1-codex-max for long-horizon agentic tasks
+        reasoning_effort: Override reasoning effort (none, low, medium, high, xhigh)
     """
     prompt = (
         "Generate and run Python code for the following task. "
@@ -1335,17 +1418,28 @@ def coder(query):
     )
     _log_prompt("coder", prompt)
 
+    model_to_use = MODEL_CODE_MAX if use_max_model else MODEL_CODE
+    effort = reasoning_effort or MODEL_REASONING_EFFORT
+
     try:
-        response = client.responses.create(
-            model=MODEL_CODE,
-            input=prompt,
-            max_output_tokens=1200,
-        )
+        request_args = {
+            "model": model_to_use,
+            "input": prompt,
+            "max_output_tokens": 4096,  # GPT-5.2-Codex supports up to 128K output
+        }
+        # Add reasoning effort for Codex models
+        if effort:
+            request_args["reasoning"] = {"effort": effort}
+        # Enable compaction for long context handling
+        if MODEL_COMPACTION:
+            request_args["store"] = True  # Enable context store for compaction
+
+        response = client.responses.create(**request_args)
         model_response = response.output_text
     except Exception as primary_exc:
         logging.warning(
             "Primary coding model %s failed (%s). Falling back to assistant model.",
-            MODEL_CODE,
+            model_to_use,
             primary_exc,
         )
         try:
@@ -1366,12 +1460,12 @@ def coder(query):
             )
             return f"An error occurred while generating or running code: {fallback_exc}"
 
-    logging.info("Code generation completed with primary/fallback model")
+    logging.info("Code generation completed with %s model (effort=%s)", model_to_use, effort)
     o1_log_filename = os.path.join(
         o1_responses_dir, f"code_response_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
     )
     with open(o1_log_filename, "w") as f:
-        f.write(f"Query: {query}\n\nResponse:\n{model_response}")
+        f.write(f"Query: {query}\nModel: {model_to_use}\nEffort: {effort}\n\nResponse:\n{model_response}")
 
     _log_response("coder", model_response or "")
     return model_response
@@ -1768,71 +1862,12 @@ Please summarize this information and suggest a topic or question we could discu
 
         logging.info("Processing user input...")
         response = gpt4o_chat(user_input)
-        logging.info(f"AI response: {response}")
+        logging.info("AI response: %s", response)
         print("\nAI:", response)
         print("\n" + "-" * 80 + "\n")
 
     logging.info("Conversation ended")
 
+
 if __name__ == "__main__":
     main()
-
-# Additional Function Call Examples
-
-# Example 1: Getting Current Weather
-def example_weather():
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_current_weather",
-                "description": "Get the current weather in a given location",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "location": {
-                            "type": "string",
-                            "description": "The city and state, e.g. San Francisco, CA",
-                        },
-                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-                    },
-                    "required": ["location"],
-                },
-            }
-        }
-    ]
-    messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
-    completion = client.chat.completions.create(
-        model=MODEL_ASSISTANT,
-        messages=messages,
-        tools=tools,
-        tool_choice="auto"
-    )
-
-    print(completion)
-
-# Example 2: Handling Images (Functionality to be implemented later)
-def example_image_handling():
-    messages = [{
-        "role": "user",
-        "content": [
-            {"type": "text", "text": "What's in this image?"},
-            {
-                "type": "image_url",
-                "image_url": {
-                    "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg",
-                }
-            },
-        ],
-    }]
-    response = client.chat.completions.create(
-        model=MODEL_ASSISTANT,
-        messages=messages,
-        max_tokens=300,
-    )
-
-    print(response.choices[0])
-
-# Uncomment the following lines to run the examples
-# example_weather()
-# example_image_handling()
