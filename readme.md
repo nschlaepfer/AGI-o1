@@ -48,7 +48,7 @@
 
 ## Architecture
 
-![AGI-o1 Architecture Diagram](path/to/your/diagram.png)
+![AGI-o1 Architecture Diagram](AGI-o1.png)
 
 **AGI-o1** follows a modular architecture where each functionality is encapsulated within dedicated functions. The system manages chat history, handles user commands, and interacts with OpenAI's API to process and respond to user inputs effectively.
 
@@ -392,82 +392,4 @@ This project is licensed under the [MIT License](LICENSE).
 For questions, suggestions, or support, please contact:
 
 - **GitHub**: [@nschlaepfer](https://github.com/nschlaepfer)
-
----
-
-*Note: Replace placeholders like `path/to/your/diagram.png`, `your.email@example.com`, and any other placeholder text with your actual details.*
-
-## Enhancements and Best Practices
-
-To make the README even more effective, consider the following enhancements:
-
-1. **Add the Architecture Diagram:**
-   
-   Ensure you replace `path/to/your/diagram.png` with the actual path to your architecture diagram. For example, if the diagram is in the `docs` folder:
-   
-   ```markdown
-   ![AGI-o1 Architecture Diagram](docs/architecture_diagram.png)
-   ```
-
-2. **Provide a `requirements.txt` File:**
-   
-   If not already present, create a `requirements.txt` file with the necessary dependencies:
-   
-   ```plaintext
-   openai
-   python-dotenv
-   ```
-   
-   This allows users to install dependencies easily using `pip install -r requirements.txt`.
-
-3. **Include Examples and Screenshots:**
-   
-   Adding screenshots of the application in action or example conversations can help users understand its functionality better.
-
-4. **Detailed Contribution Guidelines:**
-   
-   Including a `CONTRIBUTING.md` file with detailed guidelines can streamline the contribution process.
-
-5. **Add a License File:**
-   
-   Ensure you have a `LICENSE` file in your repository matching the license mentioned in the README.
-
-6. **Code of Conduct:**
-   
-   Including a `CODE_OF_CONDUCT.md` file promotes a welcoming and respectful community.
-
-7. **Issue Templates:**
-   
-   Adding issue and pull request templates can help maintain the quality and consistency of contributions.
-
-8. **Badges:**
-   
-   Incorporate badges for build status, license, and other relevant metrics to provide quick information at a glance.
-
-   ```markdown
-   ![License](https://img.shields.io/badge/license-MIT-blue.svg)
-   ![GitHub last commit](https://img.shields.io/github/last-commit/nschlaepfer/AGI-o1)
-   ```
-
-9. **Expand the Functions Section:**
-   
-   Provide more detailed explanations or usage examples for each function to help users understand how to leverage them effectively.
-
-10. **Automate Directory Creation:**
-    
-    While the script handles directory creation, documenting this behavior reassures users about the setup process.
-
-11. **Environment Variable Validation:**
-    
-    Add instructions or scripts to validate the presence and correctness of environment variables, enhancing user experience.
-
-12. **Testing Instructions:**
-    
-    If you have tests, include a section on how to run them to ensure the application works as expected.
-
-13. **FAQ Section:**
-    
-    Address common questions or issues users might encounter.
-
----
 
