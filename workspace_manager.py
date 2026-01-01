@@ -1,531 +1,671 @@
 """
-Workspace Manager - Session State Management with Persistence.
+Workspace Manager for AGI-o1 - Session and Task State Management.
 
-Inspired by Emdash's SessionRegistry and TerminalSessionManager, this module provides:
-- Registry pattern for workspace management
-- State snapshot and restoration
-- Activity tracking and event listeners
-- Workspace lifecycle management (create, attach, detach, dispose)
+Inspired by emdash's architecture:
+- Multi-layer state: persistent (JSON) + real-time (memory) + activity tracking
+- Workspace isolation for parallel task execution
+- Activity monitoring with hysteresis (debounced busy/idle states)
+- Event-driven state updates
 
-This enables persistent, resumable agent sessions with proper state management.
+Key patterns borrowed from emdash:
+- WorktreeService.ts: Task isolation via separate workspaces
+- activityStore.ts: Real-time activity monitoring with timers
+- taskTerminalsStore.ts: Per-task state with snapshot-based updates
+- DatabaseService.ts: Persistent state with migrations
 """
 
 import json
 import logging
+import os
 import time
-import uuid
-from dataclasses import dataclass, field
+import threading
+import hashlib
+from dataclasses import dataclass, field, asdict
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
-from threading import Lock
 from typing import Any, Callable, Dict, List, Optional, Set
+from uuid import uuid4
 
-logger = logging.getLogger(__name__)
 
-# Default configuration
-DEFAULT_SNAPSHOT_INTERVAL_SECONDS = 120  # 2 minutes
-DEFAULT_MAX_HISTORY_ITEMS = 100
-WORKSPACE_DIR = Path(__file__).parent / "workspaces"
+class TaskStatus(Enum):
+    """Task lifecycle states."""
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    WAITING = "waiting"  # Waiting for user input or external event
+    PAUSED = "paused"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class ActivityState(Enum):
+    """Agent activity states (from emdash activityStore pattern)."""
+    IDLE = "idle"
+    BUSY = "busy"
+    THINKING = "thinking"
+    NEUTRAL = "neutral"
+
+
+@dataclass
+class TaskContext:
+    """
+    Context for a single task/subtask.
+
+    Borrowed from emdash's Tasks schema with extensions for AGI-o1.
+    """
+    id: str
+    title: str
+    description: str = ""
+    status: TaskStatus = TaskStatus.PENDING
+    created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    updated_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    parent_id: Optional[str] = None
+    workspace_path: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    # Reasoning state
+    reasoning_history: List[Dict[str, Any]] = field(default_factory=list)
+    solutions: List[Dict[str, Any]] = field(default_factory=list)
+    best_solution: Optional[Dict[str, Any]] = None
+    score: float = 0.0
+
+    # Activity tracking (from emdash activityStore pattern)
+    activity_state: ActivityState = ActivityState.IDLE
+    last_activity: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        data = asdict(self)
+        data['status'] = self.status.value
+        data['activity_state'] = self.activity_state.value
+        return data
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'TaskContext':
+        """Create from dictionary."""
+        data = dict(data)
+        if isinstance(data.get('status'), str):
+            data['status'] = TaskStatus(data['status'])
+        if isinstance(data.get('activity_state'), str):
+            data['activity_state'] = ActivityState(data['activity_state'])
+        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
 
 
 @dataclass
 class WorkspaceSnapshot:
-    """Snapshot of workspace state for persistence."""
-    version: int = 1
-    created_at: str = ""
-    workspace_id: str = ""
-    task: str = ""
-    status: str = "active"
-    history: List[Dict[str, Any]] = field(default_factory=list)
-    context: Dict[str, Any] = field(default_factory=dict)
-    metrics: Dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
-class WorkspaceMetrics:
-    """Metrics tracking for a workspace."""
-    total_tokens: int = 0
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-    tool_calls: int = 0
-    iterations: int = 0
-    start_time: float = field(default_factory=time.time)
-    last_activity: float = field(default_factory=time.time)
-    snapshot_count: int = 0
-
-
-class Workspace:
     """
-    Represents a single agent workspace/session.
+    Snapshot of workspace state for external store pattern.
 
-    Inspired by TerminalSessionManager:
-    - Manages lifecycle (create, attach, detach, dispose)
-    - Tracks activity and metrics
-    - Supports snapshot and restore
-    - Emits events for state changes
+    Borrowed from emdash's useSyncExternalStore pattern.
     """
+    tasks: List[TaskContext]
+    active_task_id: Optional[str]
+    global_context: Dict[str, Any]
+    token_budget_used: int
+    timestamp: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'tasks': [t.to_dict() for t in self.tasks],
+            'active_task_id': self.active_task_id,
+            'global_context': self.global_context,
+            'token_budget_used': self.token_budget_used,
+            'timestamp': self.timestamp
+        }
+
+
+class ActivityMonitor:
+    """
+    Real-time activity monitoring with hysteresis.
+
+    Borrowed from emdash's activityStore.ts:
+    - Two-phase clearing: immediate busy, debounced idle
+    - Minimum hold time to prevent UI flicker
+    - Multi-listener support
+    """
+
+    BUSY_HOLD_MS = 300  # Minimum time to show busy state
+    CLEAR_BUSY_MS = 500  # Debounce delay for clearing busy
+
+    def __init__(self):
+        self._state: Dict[str, ActivityState] = {}
+        self._timers: Dict[str, Optional[threading.Timer]] = {}
+        self._last_busy_time: Dict[str, float] = {}
+        self._listeners: Dict[str, Set[Callable[[ActivityState], None]]] = {}
+        self._lock = threading.Lock()
+
+    def set_activity(self, task_id: str, state: ActivityState) -> None:
+        """Set activity state with hysteresis handling."""
+        with self._lock:
+            current = self._state.get(task_id, ActivityState.IDLE)
+
+            # Cancel any pending timer
+            timer = self._timers.get(task_id)
+            if timer:
+                timer.cancel()
+                self._timers[task_id] = None
+
+            if state == ActivityState.BUSY:
+                # Immediate transition to busy
+                self._state[task_id] = state
+                self._last_busy_time[task_id] = time.time()
+                self._notify_listeners(task_id, state)
+
+            elif state == ActivityState.IDLE and current == ActivityState.BUSY:
+                # Debounced transition to idle
+                elapsed = (time.time() - self._last_busy_time.get(task_id, 0)) * 1000
+                delay = max(0, self.CLEAR_BUSY_MS - elapsed) / 1000
+
+                def clear_busy():
+                    with self._lock:
+                        self._state[task_id] = ActivityState.IDLE
+                        self._notify_listeners(task_id, ActivityState.IDLE)
+
+                self._timers[task_id] = threading.Timer(delay, clear_busy)
+                self._timers[task_id].start()
+
+            else:
+                self._state[task_id] = state
+                self._notify_listeners(task_id, state)
+
+    def get_activity(self, task_id: str) -> ActivityState:
+        """Get current activity state for a task."""
+        return self._state.get(task_id, ActivityState.IDLE)
+
+    def subscribe(self, task_id: str, callback: Callable[[ActivityState], None]) -> Callable[[], None]:
+        """
+        Subscribe to activity state changes.
+
+        Returns unsubscribe function (emdash pattern).
+        """
+        with self._lock:
+            if task_id not in self._listeners:
+                self._listeners[task_id] = set()
+            self._listeners[task_id].add(callback)
+
+        def unsubscribe():
+            with self._lock:
+                if task_id in self._listeners:
+                    self._listeners[task_id].discard(callback)
+
+        return unsubscribe
+
+    def _notify_listeners(self, task_id: str, state: ActivityState) -> None:
+        """Notify all listeners of state change."""
+        listeners = self._listeners.get(task_id, set())
+        for callback in listeners:
+            try:
+                callback(state)
+            except Exception as e:
+                logging.warning("Activity listener error: %s", e)
+
+
+class WorkspaceManager:
+    """
+    Manages workspace state, tasks, and persistence.
+
+    Implements multi-layer state management:
+    1. Persistent layer (JSON file storage)
+    2. Real-time layer (in-memory state)
+    3. Activity layer (monitoring with hysteresis)
+
+    Key patterns from emdash:
+    - WorktreeService: Task isolation
+    - DatabaseService: Persistent state with structure
+    - activityStore: Real-time monitoring
+    """
+
+    VERSION = "1.0.0"
 
     def __init__(
         self,
-        workspace_id: str,
-        task: str,
-        context: Optional[Dict[str, Any]] = None,
-        max_history: int = DEFAULT_MAX_HISTORY_ITEMS,
+        workspace_path: Optional[Path] = None,
+        persist: bool = True
     ):
-        self.id = workspace_id
-        self.task = task
-        self.context = context or {}
-        self.max_history = max_history
+        """
+        Initialize workspace manager.
 
-        self.history: List[Dict[str, Any]] = []
-        self.metrics = WorkspaceMetrics()
-        self.status = "active"
+        Args:
+            workspace_path: Base path for workspace data
+            persist: Whether to persist state to disk
+        """
+        self.workspace_path = workspace_path or Path.cwd() / ".workspace"
+        self.persist = persist
 
-        self._disposed = False
-        self._attached = False
+        # State layers
+        self._tasks: Dict[str, TaskContext] = {}
+        self._active_task_id: Optional[str] = None
+        self._global_context: Dict[str, Any] = {}
+        self._token_budget_used: int = 0
 
-        # Event listeners
-        self._activity_listeners: Set[Callable[[], None]] = set()
-        self._complete_listeners: Set[Callable[[str], None]] = set()
-        self._error_listeners: Set[Callable[[str], None]] = set()
+        # Activity monitoring
+        self._activity_monitor = ActivityMonitor()
 
-        # Snapshot timer
-        self._last_snapshot_at: Optional[float] = None
-        self._last_snapshot_reason: Optional[str] = None
+        # Listeners for external store pattern
+        self._snapshot_listeners: Set[Callable[[WorkspaceSnapshot], None]] = set()
 
-    def attach(self) -> None:
-        """Attach to this workspace (make it active)."""
-        if self._disposed:
-            raise RuntimeError(f"Workspace {self.id} is disposed")
-        self._attached = True
-        self._emit_activity()
-        logger.info(f"Attached to workspace {self.id}")
+        # Thread safety
+        self._lock = threading.RLock()
 
-    def detach(self) -> None:
-        """Detach from this workspace."""
-        if self._attached:
-            self._attached = False
-            self._capture_snapshot("detach")
-            logger.info(f"Detached from workspace {self.id}")
+        # Initialize workspace
+        if persist:
+            self._ensure_workspace_dirs()
+            self._load_state()
 
-    def dispose(self) -> None:
-        """Dispose of this workspace and clean up resources."""
-        if self._disposed:
+    def _ensure_workspace_dirs(self) -> None:
+        """Create workspace directories if needed."""
+        self.workspace_path.mkdir(parents=True, exist_ok=True)
+        (self.workspace_path / "tasks").mkdir(exist_ok=True)
+        (self.workspace_path / "snapshots").mkdir(exist_ok=True)
+
+    def _state_file(self) -> Path:
+        """Get path to main state file."""
+        return self.workspace_path / "state.json"
+
+    def _load_state(self) -> None:
+        """Load persisted state from disk."""
+        state_file = self._state_file()
+        if not state_file.exists():
             return
-        self._disposed = True
-        self.detach()
-        self._capture_snapshot("dispose")
-        self._activity_listeners.clear()
-        self._complete_listeners.clear()
-        self._error_listeners.clear()
-        logger.info(f"Disposed workspace {self.id}")
 
-    def add_message(
+        try:
+            with open(state_file, 'r') as f:
+                data = json.load(f)
+
+            self._active_task_id = data.get('active_task_id')
+            self._global_context = data.get('global_context', {})
+            self._token_budget_used = data.get('token_budget_used', 0)
+
+            for task_data in data.get('tasks', []):
+                task = TaskContext.from_dict(task_data)
+                self._tasks[task.id] = task
+
+            logging.info("Loaded workspace state: %d tasks", len(self._tasks))
+
+        except Exception as e:
+            logging.warning("Failed to load workspace state: %s", e)
+
+    def _save_state(self) -> None:
+        """Persist current state to disk."""
+        if not self.persist:
+            return
+
+        try:
+            snapshot = self.get_snapshot()
+            with open(self._state_file(), 'w') as f:
+                json.dump(snapshot.to_dict(), f, indent=2)
+
+        except Exception as e:
+            logging.warning("Failed to save workspace state: %s", e)
+
+    def get_snapshot(self) -> WorkspaceSnapshot:
+        """
+        Get current workspace snapshot.
+
+        Implements external store snapshot pattern from emdash.
+        """
+        with self._lock:
+            return WorkspaceSnapshot(
+                tasks=list(self._tasks.values()),
+                active_task_id=self._active_task_id,
+                global_context=dict(self._global_context),
+                token_budget_used=self._token_budget_used,
+                timestamp=datetime.utcnow().isoformat()
+            )
+
+    def subscribe(self, callback: Callable[[WorkspaceSnapshot], None]) -> Callable[[], None]:
+        """
+        Subscribe to workspace state changes.
+
+        Returns unsubscribe function (emdash useSyncExternalStore pattern).
+        """
+        self._snapshot_listeners.add(callback)
+
+        def unsubscribe():
+            self._snapshot_listeners.discard(callback)
+
+        return unsubscribe
+
+    def _notify_change(self) -> None:
+        """Notify listeners of state change."""
+        snapshot = self.get_snapshot()
+        for callback in self._snapshot_listeners:
+            try:
+                callback(snapshot)
+            except Exception as e:
+                logging.warning("Snapshot listener error: %s", e)
+
+        self._save_state()
+
+    # ---- Task Management ----
+
+    def create_task(
         self,
-        role: str,
-        content: str,
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        """Add a message to the workspace history."""
-        if self._disposed:
-            raise RuntimeError(f"Workspace {self.id} is disposed")
+        title: str,
+        description: str = "",
+        parent_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> TaskContext:
+        """
+        Create a new task with isolated workspace.
 
-        message = {
-            "role": role,
-            "content": content,
-            "timestamp": datetime.now().isoformat(),
-            "metadata": metadata or {},
-        }
-        self.history.append(message)
+        Inspired by emdash's WorktreeService - each task gets isolation.
+        """
+        with self._lock:
+            task_id = str(uuid4())
 
-        # Trim history if needed
-        if len(self.history) > self.max_history:
-            self.history = self.history[-self.max_history:]
+            # Create task-specific workspace (like emdash worktrees)
+            task_workspace = self.workspace_path / "tasks" / task_id
+            task_workspace.mkdir(parents=True, exist_ok=True)
 
-        self.metrics.last_activity = time.time()
-        self._emit_activity()
+            task = TaskContext(
+                id=task_id,
+                title=title,
+                description=description,
+                parent_id=parent_id,
+                workspace_path=str(task_workspace),
+                metadata=metadata or {}
+            )
 
-    def add_tool_call(
+            self._tasks[task_id] = task
+
+            # Auto-activate if no active task
+            if not self._active_task_id:
+                self._active_task_id = task_id
+
+            self._notify_change()
+            logging.info("Created task '%s' with workspace: %s", title, task_workspace)
+
+            return task
+
+    def get_task(self, task_id: str) -> Optional[TaskContext]:
+        """Get task by ID."""
+        return self._tasks.get(task_id)
+
+    def get_active_task(self) -> Optional[TaskContext]:
+        """Get currently active task."""
+        if self._active_task_id:
+            return self._tasks.get(self._active_task_id)
+        return None
+
+    def set_active_task(self, task_id: str) -> bool:
+        """Set the active task."""
+        with self._lock:
+            if task_id not in self._tasks:
+                return False
+            self._active_task_id = task_id
+            self._notify_change()
+            return True
+
+    def update_task(
         self,
-        tool_name: str,
-        arguments: Dict[str, Any],
-        result: str,
-        success: bool = True,
-    ) -> None:
-        """Add a tool call record to history."""
-        self.add_message(
-            role="tool",
-            content=result,
-            metadata={
-                "tool_name": tool_name,
-                "arguments": arguments,
-                "success": success,
-            },
-        )
-        self.metrics.tool_calls += 1
+        task_id: str,
+        status: Optional[TaskStatus] = None,
+        score: Optional[float] = None,
+        metadata_update: Optional[Dict[str, Any]] = None
+    ) -> Optional[TaskContext]:
+        """Update task properties."""
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return None
 
-    def update_metrics(
+            if status:
+                task.status = status
+            if score is not None:
+                task.score = score
+            if metadata_update:
+                task.metadata.update(metadata_update)
+
+            task.updated_at = datetime.utcnow().isoformat()
+            self._notify_change()
+
+            return task
+
+    def add_solution(
         self,
-        prompt_tokens: int = 0,
-        completion_tokens: int = 0,
-        iterations: int = 0,
-    ) -> None:
-        """Update workspace metrics."""
-        self.metrics.prompt_tokens += prompt_tokens
-        self.metrics.completion_tokens += completion_tokens
-        self.metrics.total_tokens += prompt_tokens + completion_tokens
-        self.metrics.iterations += iterations
-        self.metrics.last_activity = time.time()
+        task_id: str,
+        solution: Dict[str, Any],
+        score: float
+    ) -> Optional[TaskContext]:
+        """
+        Add a solution attempt to a task.
 
-    def mark_complete(self, outcome: str = "success") -> None:
-        """Mark the workspace as complete."""
-        self.status = "completed"
-        self._emit_complete(outcome)
-        self._capture_snapshot("complete")
+        Implements best-result tracking from poetiq-arc-agi-solver.
+        """
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return None
 
-    def mark_error(self, error: str) -> None:
-        """Mark the workspace as having an error."""
-        self.status = "error"
-        self._emit_error(error)
-        self._capture_snapshot("error")
+            solution_entry = {
+                'solution': solution,
+                'score': score,
+                'timestamp': datetime.utcnow().isoformat(),
+                'iteration': len(task.solutions) + 1
+            }
+            task.solutions.append(solution_entry)
 
-    def get_context_summary(self) -> str:
-        """Get a summary of the workspace context for prompts."""
-        lines = [f"Workspace: {self.id}", f"Task: {self.task}"]
+            # Update best solution if this is better
+            if not task.best_solution or score > task.score:
+                task.best_solution = solution_entry
+                task.score = score
 
-        if self.context:
-            lines.append("Context:")
-            for key, value in self.context.items():
-                lines.append(f"  {key}: {value}")
+            task.updated_at = datetime.utcnow().isoformat()
+            self._notify_change()
 
-        lines.append(f"Status: {self.status}")
-        lines.append(f"Messages: {len(self.history)}")
-        lines.append(f"Tool calls: {self.metrics.tool_calls}")
+            return task
+
+    def add_reasoning_step(
+        self,
+        task_id: str,
+        step_type: str,
+        content: Any,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> Optional[TaskContext]:
+        """Add a reasoning step to task history."""
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return None
+
+            step = {
+                'type': step_type,
+                'content': content,
+                'metadata': metadata or {},
+                'timestamp': datetime.utcnow().isoformat()
+            }
+            task.reasoning_history.append(step)
+            task.updated_at = datetime.utcnow().isoformat()
+
+            self._notify_change()
+            return task
+
+    def list_tasks(
+        self,
+        status: Optional[TaskStatus] = None,
+        parent_id: Optional[str] = None
+    ) -> List[TaskContext]:
+        """List tasks with optional filtering."""
+        with self._lock:
+            tasks = list(self._tasks.values())
+
+            if status:
+                tasks = [t for t in tasks if t.status == status]
+            if parent_id is not None:
+                tasks = [t for t in tasks if t.parent_id == parent_id]
+
+            return sorted(tasks, key=lambda t: t.created_at, reverse=True)
+
+    def delete_task(self, task_id: str) -> bool:
+        """Delete a task and its workspace."""
+        with self._lock:
+            task = self._tasks.pop(task_id, None)
+            if not task:
+                return False
+
+            # Clean up workspace
+            if task.workspace_path:
+                import shutil
+                try:
+                    shutil.rmtree(task.workspace_path)
+                except Exception as e:
+                    logging.warning("Failed to cleanup task workspace: %s", e)
+
+            # Update active task if needed
+            if self._active_task_id == task_id:
+                remaining = list(self._tasks.keys())
+                self._active_task_id = remaining[0] if remaining else None
+
+            self._notify_change()
+            return True
+
+    # ---- Activity Tracking ----
+
+    def set_task_activity(self, task_id: str, state: ActivityState) -> None:
+        """Update task activity state with hysteresis."""
+        self._activity_monitor.set_activity(task_id, state)
+
+        task = self._tasks.get(task_id)
+        if task:
+            task.activity_state = state
+            task.last_activity = datetime.utcnow().isoformat()
+
+    def get_task_activity(self, task_id: str) -> ActivityState:
+        """Get current task activity state."""
+        return self._activity_monitor.get_activity(task_id)
+
+    def subscribe_activity(
+        self,
+        task_id: str,
+        callback: Callable[[ActivityState], None]
+    ) -> Callable[[], None]:
+        """Subscribe to task activity changes."""
+        return self._activity_monitor.subscribe(task_id, callback)
+
+    # ---- Global Context ----
+
+    def set_context(self, key: str, value: Any) -> None:
+        """Set global context value."""
+        with self._lock:
+            self._global_context[key] = value
+            self._notify_change()
+
+    def get_context(self, key: str, default: Any = None) -> Any:
+        """Get global context value."""
+        return self._global_context.get(key, default)
+
+    def update_token_budget(self, tokens: int) -> None:
+        """Update token budget usage."""
+        with self._lock:
+            self._token_budget_used += tokens
+            self._notify_change()
+
+    # ---- Checkpoint/Restore ----
+
+    def save_checkpoint(self, name: Optional[str] = None) -> Path:
+        """
+        Save a named checkpoint of current state.
+
+        Inspired by emdash's checkpoint pattern for session recovery.
+        """
+        checkpoint_name = name or f"checkpoint_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+        checkpoint_path = self.workspace_path / "snapshots" / f"{checkpoint_name}.json"
+
+        snapshot = self.get_snapshot()
+        with open(checkpoint_path, 'w') as f:
+            json.dump(snapshot.to_dict(), f, indent=2)
+
+        logging.info("Saved checkpoint: %s", checkpoint_path)
+        return checkpoint_path
+
+    def restore_checkpoint(self, name: str) -> bool:
+        """Restore from a named checkpoint."""
+        checkpoint_path = self.workspace_path / "snapshots" / f"{name}.json"
+
+        if not checkpoint_path.exists():
+            logging.warning("Checkpoint not found: %s", name)
+            return False
+
+        try:
+            with open(checkpoint_path, 'r') as f:
+                data = json.load(f)
+
+            with self._lock:
+                self._tasks.clear()
+                for task_data in data.get('tasks', []):
+                    task = TaskContext.from_dict(task_data)
+                    self._tasks[task.id] = task
+
+                self._active_task_id = data.get('active_task_id')
+                self._global_context = data.get('global_context', {})
+                self._token_budget_used = data.get('token_budget_used', 0)
+
+            self._notify_change()
+            logging.info("Restored checkpoint: %s", name)
+            return True
+
+        except Exception as e:
+            logging.error("Failed to restore checkpoint: %s", e)
+            return False
+
+    def list_checkpoints(self) -> List[str]:
+        """List available checkpoints."""
+        snapshots_dir = self.workspace_path / "snapshots"
+        if not snapshots_dir.exists():
+            return []
+        return [p.stem for p in snapshots_dir.glob("*.json")]
+
+    # ---- Session Summary ----
+
+    def get_session_summary(self) -> str:
+        """Get human-readable session summary."""
+        snapshot = self.get_snapshot()
+
+        lines = [
+            f"=== Workspace Session Summary ===",
+            f"Tasks: {len(snapshot.tasks)}",
+            f"Active Task: {snapshot.active_task_id or 'None'}",
+            f"Token Budget Used: {snapshot.token_budget_used:,}",
+            ""
+        ]
+
+        for task in snapshot.tasks[:5]:  # Show top 5
+            status_icon = {
+                TaskStatus.PENDING: "⏳",
+                TaskStatus.IN_PROGRESS: "🔄",
+                TaskStatus.COMPLETED: "✅",
+                TaskStatus.FAILED: "❌",
+                TaskStatus.PAUSED: "⏸️",
+                TaskStatus.WAITING: "⏸️",
+                TaskStatus.CANCELLED: "🚫"
+            }.get(task.status, "❓")
+
+            active = " [ACTIVE]" if task.id == snapshot.active_task_id else ""
+            lines.append(f"  {status_icon} {task.title} (score: {task.score:.2f}){active}")
+
+        if len(snapshot.tasks) > 5:
+            lines.append(f"  ... and {len(snapshot.tasks) - 5} more tasks")
 
         return "\n".join(lines)
 
-    def get_recent_history(self, n: int = 10) -> List[Dict[str, Any]]:
-        """Get the most recent history items."""
-        return self.history[-n:]
 
-    def to_snapshot(self) -> WorkspaceSnapshot:
-        """Create a snapshot of the workspace state."""
-        return WorkspaceSnapshot(
-            version=1,
-            created_at=datetime.now().isoformat(),
-            workspace_id=self.id,
-            task=self.task,
-            status=self.status,
-            history=list(self.history),
-            context=dict(self.context),
-            metrics={
-                "total_tokens": self.metrics.total_tokens,
-                "prompt_tokens": self.metrics.prompt_tokens,
-                "completion_tokens": self.metrics.completion_tokens,
-                "tool_calls": self.metrics.tool_calls,
-                "iterations": self.metrics.iterations,
-                "start_time": self.metrics.start_time,
-                "last_activity": self.metrics.last_activity,
-                "snapshot_count": self.metrics.snapshot_count,
-            },
-        )
+# ---- Global Instance ----
 
-    @classmethod
-    def from_snapshot(cls, snapshot: WorkspaceSnapshot) -> "Workspace":
-        """Restore a workspace from a snapshot."""
-        workspace = cls(
-            workspace_id=snapshot.workspace_id,
-            task=snapshot.task,
-            context=snapshot.context,
-        )
-        workspace.status = snapshot.status
-        workspace.history = list(snapshot.history)
-
-        # Restore metrics
-        if snapshot.metrics:
-            workspace.metrics.total_tokens = snapshot.metrics.get("total_tokens", 0)
-            workspace.metrics.prompt_tokens = snapshot.metrics.get("prompt_tokens", 0)
-            workspace.metrics.completion_tokens = snapshot.metrics.get("completion_tokens", 0)
-            workspace.metrics.tool_calls = snapshot.metrics.get("tool_calls", 0)
-            workspace.metrics.iterations = snapshot.metrics.get("iterations", 0)
-            workspace.metrics.start_time = snapshot.metrics.get("start_time", time.time())
-            workspace.metrics.last_activity = snapshot.metrics.get("last_activity", time.time())
-            workspace.metrics.snapshot_count = snapshot.metrics.get("snapshot_count", 0)
-
-        return workspace
-
-    def _capture_snapshot(self, reason: str) -> None:
-        """Capture and persist a snapshot."""
-        self.metrics.snapshot_count += 1
-        self._last_snapshot_at = time.time()
-        self._last_snapshot_reason = reason
-        # Note: Actual persistence is handled by WorkspaceRegistry
-
-    def _emit_activity(self) -> None:
-        """Emit activity event to listeners."""
-        for listener in self._activity_listeners:
-            try:
-                listener()
-            except Exception as e:
-                logger.warning(f"Activity listener error: {e}")
-
-    def _emit_complete(self, outcome: str) -> None:
-        """Emit completion event to listeners."""
-        for listener in self._complete_listeners:
-            try:
-                listener(outcome)
-            except Exception as e:
-                logger.warning(f"Complete listener error: {e}")
-
-    def _emit_error(self, error: str) -> None:
-        """Emit error event to listeners."""
-        for listener in self._error_listeners:
-            try:
-                listener(error)
-            except Exception as e:
-                logger.warning(f"Error listener error: {e}")
-
-    # Listener registration methods
-
-    def on_activity(self, callback: Callable[[], None]) -> Callable[[], None]:
-        """Register an activity listener. Returns unsubscribe function."""
-        self._activity_listeners.add(callback)
-        return lambda: self._activity_listeners.discard(callback)
-
-    def on_complete(self, callback: Callable[[str], None]) -> Callable[[], None]:
-        """Register a completion listener. Returns unsubscribe function."""
-        self._complete_listeners.add(callback)
-        return lambda: self._complete_listeners.discard(callback)
-
-    def on_error(self, callback: Callable[[str], None]) -> Callable[[], None]:
-        """Register an error listener. Returns unsubscribe function."""
-        self._error_listeners.add(callback)
-        return lambda: self._error_listeners.discard(callback)
+_workspace_manager: Optional[WorkspaceManager] = None
 
 
-class WorkspaceRegistry:
-    """
-    Registry for managing multiple workspaces.
-
-    Inspired by Emdash's SessionRegistry:
-    - getOrCreate pattern for workspace access
-    - Lifecycle management (attach, detach, dispose)
-    - Persistence via snapshots
-    - Global operations (disposeAll)
-    """
-
-    def __init__(
-        self,
-        storage_dir: Optional[Path] = None,
-        auto_save: bool = True,
-    ):
-        self.storage_dir = storage_dir or WORKSPACE_DIR
-        self.storage_dir.mkdir(parents=True, exist_ok=True)
-        self.auto_save = auto_save
-
-        self._workspaces: Dict[str, Workspace] = {}
-        self._lock = Lock()
-
-    def create(
-        self,
-        task: str,
-        workspace_id: Optional[str] = None,
-        context: Optional[Dict[str, Any]] = None,
-    ) -> Workspace:
-        """Create a new workspace."""
-        with self._lock:
-            workspace_id = workspace_id or f"ws_{uuid.uuid4().hex[:8]}"
-
-            if workspace_id in self._workspaces:
-                raise ValueError(f"Workspace {workspace_id} already exists")
-
-            workspace = Workspace(
-                workspace_id=workspace_id,
-                task=task,
-                context=context,
-            )
-            self._workspaces[workspace_id] = workspace
-
-            if self.auto_save:
-                self._save_workspace(workspace)
-
-            logger.info(f"Created workspace {workspace_id}")
-            return workspace
-
-    def get(self, workspace_id: str) -> Optional[Workspace]:
-        """Get a workspace by ID."""
-        return self._workspaces.get(workspace_id)
-
-    def get_or_create(
-        self,
-        workspace_id: str,
-        task: str = "",
-        context: Optional[Dict[str, Any]] = None,
-    ) -> Workspace:
-        """Get an existing workspace or create a new one."""
-        with self._lock:
-            if workspace_id in self._workspaces:
-                return self._workspaces[workspace_id]
-
-            # Try to restore from disk
-            restored = self._load_workspace(workspace_id)
-            if restored:
-                self._workspaces[workspace_id] = restored
-                return restored
-
-            # Create new
-            workspace = Workspace(
-                workspace_id=workspace_id,
-                task=task,
-                context=context,
-            )
-            self._workspaces[workspace_id] = workspace
-
-            if self.auto_save:
-                self._save_workspace(workspace)
-
-            return workspace
-
-    def attach(self, workspace_id: str) -> Optional[Workspace]:
-        """Attach to a workspace."""
-        workspace = self.get(workspace_id)
-        if workspace:
-            workspace.attach()
-        return workspace
-
-    def detach(self, workspace_id: str) -> None:
-        """Detach from a workspace."""
-        workspace = self.get(workspace_id)
-        if workspace:
-            workspace.detach()
-            if self.auto_save:
-                self._save_workspace(workspace)
-
-    def dispose(self, workspace_id: str) -> None:
-        """Dispose of a workspace."""
-        with self._lock:
-            workspace = self._workspaces.pop(workspace_id, None)
-            if workspace:
-                workspace.dispose()
-                if self.auto_save:
-                    self._save_workspace(workspace)
-
-    def dispose_all(self) -> None:
-        """Dispose of all workspaces."""
-        with self._lock:
-            for workspace_id in list(self._workspaces.keys()):
-                workspace = self._workspaces.pop(workspace_id, None)
-                if workspace:
-                    workspace.dispose()
-                    if self.auto_save:
-                        self._save_workspace(workspace)
-
-    def list_workspaces(self) -> List[Dict[str, Any]]:
-        """List all workspaces with basic info."""
-        result = []
-        for ws in self._workspaces.values():
-            result.append({
-                "id": ws.id,
-                "task": ws.task,
-                "status": ws.status,
-                "messages": len(ws.history),
-                "last_activity": ws.metrics.last_activity,
-            })
-        return result
-
-    def list_saved_workspaces(self) -> List[str]:
-        """List all saved workspace IDs from disk."""
-        if not self.storage_dir.exists():
-            return []
-        return [f.stem for f in self.storage_dir.glob("*.json")]
-
-    def save_all(self) -> None:
-        """Save all workspaces to disk."""
-        for workspace in self._workspaces.values():
-            self._save_workspace(workspace)
-
-    def _save_workspace(self, workspace: Workspace) -> None:
-        """Save a workspace to disk."""
-        try:
-            snapshot = workspace.to_snapshot()
-            file_path = self.storage_dir / f"{workspace.id}.json"
-
-            with open(file_path, "w") as f:
-                json.dump({
-                    "version": snapshot.version,
-                    "created_at": snapshot.created_at,
-                    "workspace_id": snapshot.workspace_id,
-                    "task": snapshot.task,
-                    "status": snapshot.status,
-                    "history": snapshot.history,
-                    "context": snapshot.context,
-                    "metrics": snapshot.metrics,
-                }, f, indent=2)
-
-            logger.debug(f"Saved workspace {workspace.id}")
-        except Exception as e:
-            logger.error(f"Failed to save workspace {workspace.id}: {e}")
-
-    def _load_workspace(self, workspace_id: str) -> Optional[Workspace]:
-        """Load a workspace from disk."""
-        try:
-            file_path = self.storage_dir / f"{workspace_id}.json"
-            if not file_path.exists():
-                return None
-
-            with open(file_path, "r") as f:
-                data = json.load(f)
-
-            snapshot = WorkspaceSnapshot(
-                version=data.get("version", 1),
-                created_at=data.get("created_at", ""),
-                workspace_id=data.get("workspace_id", workspace_id),
-                task=data.get("task", ""),
-                status=data.get("status", "active"),
-                history=data.get("history", []),
-                context=data.get("context", {}),
-                metrics=data.get("metrics", {}),
-            )
-
-            workspace = Workspace.from_snapshot(snapshot)
-            logger.info(f"Loaded workspace {workspace_id} from disk")
-            return workspace
-
-        except Exception as e:
-            logger.error(f"Failed to load workspace {workspace_id}: {e}")
-            return None
+def get_workspace_manager(workspace_path: Optional[Path] = None) -> WorkspaceManager:
+    """Get or create the global workspace manager instance."""
+    global _workspace_manager
+    if _workspace_manager is None:
+        _workspace_manager = WorkspaceManager(workspace_path)
+    return _workspace_manager
 
 
-# Global registry instance
-_registry: Optional[WorkspaceRegistry] = None
-
-
-def get_registry() -> WorkspaceRegistry:
-    """Get the global workspace registry."""
-    global _registry
-    if _registry is None:
-        _registry = WorkspaceRegistry()
-    return _registry
-
-
-def create_workspace(
-    task: str,
-    workspace_id: Optional[str] = None,
-    context: Optional[Dict[str, Any]] = None,
-) -> Workspace:
-    """Create a new workspace in the global registry."""
-    return get_registry().create(task, workspace_id, context)
-
-
-def get_workspace(workspace_id: str) -> Optional[Workspace]:
-    """Get a workspace from the global registry."""
-    return get_registry().get(workspace_id)
-
-
-def get_or_create_workspace(
-    workspace_id: str,
-    task: str = "",
-    context: Optional[Dict[str, Any]] = None,
-) -> Workspace:
-    """Get or create a workspace in the global registry."""
-    return get_registry().get_or_create(workspace_id, task, context)
+def reset_workspace_manager(workspace_path: Optional[Path] = None) -> WorkspaceManager:
+    """Reset and recreate the workspace manager."""
+    global _workspace_manager
+    _workspace_manager = WorkspaceManager(workspace_path)
+    return _workspace_manager

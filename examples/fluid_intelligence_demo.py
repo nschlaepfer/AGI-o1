@@ -30,10 +30,9 @@ from fluid_reasoning import (
     create_simple_evaluator,
 )
 from workspace_manager import (
-    WorkspaceRegistry,
-    create_workspace,
-    get_workspace,
-    get_or_create_workspace,
+    WorkspaceManager,
+    get_workspace_manager,
+    TaskStatus,
 )
 from scoring import (
     SoftScorer,
@@ -192,70 +191,84 @@ def demo_workspace_manager():
 
     This shows how the system:
     1. Creates persistent workspaces for tasks
-    2. Tracks messages and metrics
-    3. Saves and restores state
+    2. Tracks reasoning steps and solutions
+    3. Saves and restores state via checkpoints
     """
     print("\n" + "="*60)
     print("DEMO 2: Workspace Management with Persistence")
     print("="*60 + "\n")
 
-    # Create a workspace registry
-    registry = WorkspaceRegistry(
-        storage_dir=Path(__file__).parent / "demo_workspaces",
-        auto_save=True,
+    # Create a workspace manager with custom path
+    manager = WorkspaceManager(
+        workspace_path=Path(__file__).parent / "demo_workspaces",
+        persist=True,
     )
 
-    # Create a workspace for a task
-    workspace = registry.create(
-        task="Implement a sorting algorithm",
-        workspace_id="demo_sort_task",
-        context={"language": "python", "complexity": "medium"},
+    # Create a task with isolated workspace
+    task = manager.create_task(
+        title="Implement a sorting algorithm",
+        description="Implement quicksort in Python",
+        metadata={"language": "python", "complexity": "medium"},
     )
 
-    print(f"Created workspace: {workspace.id}")
-    print(f"Task: {workspace.task}")
+    print(f"Created task: {task.id}")
+    print(f"Title: {task.title}")
 
-    # Simulate interaction
-    workspace.add_message("user", "Please implement quicksort in Python")
-    workspace.add_message("assistant", "Here's a quicksort implementation...")
-    workspace.add_tool_call(
-        tool_name="deep_reasoning",
-        arguments={"query": "optimal quicksort pivot selection"},
-        result="For optimal pivot selection, use median-of-three...",
-        success=True,
+    # Simulate reasoning steps
+    manager.add_reasoning_step(
+        task.id,
+        step_type="user_request",
+        content="Please implement quicksort in Python",
     )
-    workspace.update_metrics(prompt_tokens=150, completion_tokens=200, iterations=1)
-
-    print(f"\nWorkspace state:")
-    print(f"  Messages: {len(workspace.history)}")
-    print(f"  Tool calls: {workspace.metrics.tool_calls}")
-    print(f"  Total tokens: {workspace.metrics.total_tokens}")
-
-    # Get context summary
-    print(f"\nContext summary:")
-    print(workspace.get_context_summary())
-
-    # Simulate detach/reattach (persistence)
-    registry.detach("demo_sort_task")
-    print("\nDetached from workspace (saved to disk)")
-
-    # Simulate new session - restore from disk
-    restored_workspace = registry.get_or_create(
-        workspace_id="demo_sort_task",
-        task="",  # Will be loaded from disk
+    manager.add_reasoning_step(
+        task.id,
+        step_type="assistant_response",
+        content="Here's a quicksort implementation...",
     )
-    print(f"\nRestored workspace: {restored_workspace.id}")
-    print(f"  Restored messages: {len(restored_workspace.history)}")
-    print(f"  Restored tool calls: {restored_workspace.metrics.tool_calls}")
+    manager.add_reasoning_step(
+        task.id,
+        step_type="tool_call",
+        content="For optimal pivot selection, use median-of-three...",
+        metadata={
+            "tool_name": "deep_reasoning",
+            "arguments": {"query": "optimal quicksort pivot selection"},
+            "success": True,
+        },
+    )
+    manager.update_token_budget(350)  # 150 + 200
 
-    # List all workspaces
-    print("\nAll workspaces:")
-    for ws_info in registry.list_workspaces():
-        print(f"  - {ws_info['id']}: {ws_info['status']} ({ws_info['messages']} messages)")
+    # Get updated task
+    task = manager.get_task(task.id)
+    print(f"\nTask state:")
+    print(f"  Reasoning steps: {len(task.reasoning_history)}")
+    print(f"  Status: {task.status.value}")
+
+    # Get session summary
+    print(f"\nSession summary:")
+    print(manager.get_session_summary())
+
+    # Save checkpoint (persistence)
+    checkpoint_path = manager.save_checkpoint("demo_checkpoint")
+    print(f"\nSaved checkpoint: {checkpoint_path}")
+
+    # Simulate adding a solution
+    manager.add_solution(
+        task.id,
+        solution={"code": "def quicksort(arr): ..."},
+        score=0.85,
+    )
+
+    # List all tasks
+    print("\nAll tasks:")
+    for t in manager.list_tasks():
+        print(f"  - {t.id[:8]}...: {t.title} ({t.status.value}, score: {t.score:.2f})")
+
+    # List checkpoints
+    print(f"\nAvailable checkpoints: {manager.list_checkpoints()}")
 
     # Cleanup
-    registry.dispose("demo_sort_task")
-    print("\nDisposed demo workspace")
+    manager.delete_task(task.id)
+    print("\nDeleted demo task")
 
 
 def demo_soft_scoring():
@@ -359,10 +372,10 @@ def demo_integrated_pipeline():
     Demonstrate the full integrated pipeline.
 
     This combines all modules:
-    1. Create a workspace for the task
+    1. Create a task in the workspace manager
     2. Use soft scoring for evaluation
     3. Apply fluid reasoning for iterative improvement
-    4. Track everything in the workspace
+    4. Track everything via reasoning steps and solutions
     """
     print("\n" + "="*60)
     print("DEMO 4: Integrated Fluid Intelligence Pipeline")
@@ -370,14 +383,16 @@ def demo_integrated_pipeline():
 
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-    # 1. Create workspace for the task
-    workspace = create_workspace(
-        task="Implement array rotation",
-        workspace_id="demo_integrated",
-        context={"type": "coding", "difficulty": "easy"},
+    # 1. Create task in workspace manager
+    manager = get_workspace_manager()
+    task = manager.create_task(
+        title="Implement array rotation",
+        description="Rotate a 2D list 90 degrees clockwise",
+        metadata={"type": "coding", "difficulty": "easy"},
     )
+    task_id = task.id
 
-    print(f"Created workspace: {workspace.id}")
+    print(f"Created task: {task.id}")
 
     # 2. Set up soft scorer
     scorer = SoftScorer(success_threshold=0.85)
@@ -391,9 +406,10 @@ def demo_integrated_pipeline():
     def evaluate_with_scoring(solution: str, context: dict) -> tuple:
         """Evaluation function using soft scorer."""
         result = scorer.score(solution, context)
-        workspace.add_message(
-            "evaluation",
-            f"Score: {result.score:.2f}",
+        manager.add_reasoning_step(
+            task_id,
+            step_type="evaluation",
+            content=f"Score: {result.score:.2f}",
             metadata={"dimension_scores": result.dimension_scores},
         )
         return result.success, result.score, result.feedback
@@ -420,26 +436,28 @@ def transform(input_data):
     print("\nRunning fluid intelligence pipeline...")
     result = asyncio.run(reasoner.solve("rotate a 2D list 90 degrees clockwise"))
 
-    # 5. Update workspace with results
-    workspace.add_message(
-        "result",
-        result.final_output,
+    # 5. Update task with results
+    manager.add_solution(
+        task_id,
+        solution={"code": result.final_output},
+        score=result.best_score,
+    )
+    manager.add_reasoning_step(
+        task_id,
+        step_type="result",
+        content=result.final_output,
         metadata={
             "success": result.success,
-            "score": result.best_score,
             "iterations": result.iteration_count,
         },
     )
-    workspace.update_metrics(
-        prompt_tokens=result.prompt_tokens,
-        completion_tokens=result.completion_tokens,
-        iterations=result.iteration_count,
-    )
+    manager.update_token_budget(result.prompt_tokens + result.completion_tokens)
 
+    # Update task status
     if result.success:
-        workspace.mark_complete("success")
+        manager.update_task(task_id, status=TaskStatus.COMPLETED)
     else:
-        workspace.mark_complete("partial")
+        manager.update_task(task_id, status=TaskStatus.FAILED)
 
     # 6. Report
     print(f"\nPipeline Results:")
@@ -447,11 +465,10 @@ def transform(input_data):
     print(f"  Final Score: {result.best_score:.2f}")
     print(f"  Iterations: {result.iteration_count}")
     print(f"\nWorkspace Summary:")
-    print(workspace.get_context_summary())
+    print(manager.get_session_summary())
 
     # Cleanup
-    from workspace_manager import get_registry
-    get_registry().dispose("demo_integrated")
+    manager.delete_task(task_id)
 
 
 if __name__ == "__main__":
